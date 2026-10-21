@@ -8,7 +8,8 @@ Two 32-byte keys, both generated on first use:
 Sources, in order:
   1. env  VEIL_VAULT_KEY / VEIL_TOKEN_SECRET (base64)       -- CI, containers, Linux
   2. macOS Keychain, service "veil" (VEIL_KEYCHAIN=path selects a keychain file);
-     Linux Secret Service via `secret-tool` (GNOME Keyring, KWallet, KeePassXC...)
+     Linux Secret Service via `secret-tool` (GNOME Keyring, KWallet, KeePassXC...);
+     Windows Credential Manager, targets "veil:<name>" (VEIL_WINCRED=0 disables)
   3. fallback: $VEIL_HOME/keys/<name>, mode 0600, with a warning
 """
 
@@ -23,6 +24,59 @@ import sys
 
 SERVICE = "veil"
 _warned = False
+
+
+# -- Windows Credential Manager (ctypes; no dependency) ---------------------------
+
+def _wincred() -> bool:
+    return sys.platform == "win32" and os.environ.get("VEIL_WINCRED", "1") != "0"
+
+
+def _wincred_api():
+    import ctypes
+    from ctypes import wintypes
+
+    class CREDENTIAL(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD), ("Type", wintypes.DWORD), ("TargetName", wintypes.LPWSTR),
+                    ("Comment", wintypes.LPWSTR), ("LastWritten", wintypes.FILETIME),
+                    ("CredentialBlobSize", wintypes.DWORD), ("CredentialBlob", ctypes.POINTER(ctypes.c_char)),
+                    ("Persist", wintypes.DWORD), ("AttributeCount", wintypes.DWORD),
+                    ("Attributes", ctypes.c_void_p), ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR)]
+    api = ctypes.WinDLL("advapi32", use_last_error=True)
+    api.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                              ctypes.POINTER(ctypes.POINTER(CREDENTIAL))]
+    api.CredWriteW.argtypes = [ctypes.POINTER(CREDENTIAL), wintypes.DWORD]
+    api.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+    api.CredFree.argtypes = [ctypes.c_void_p]
+    return ctypes, CREDENTIAL, api
+
+
+CRED_TYPE_GENERIC, CRED_PERSIST_LOCAL_MACHINE = 1, 2
+
+
+def _wincred_get(name: str) -> bytes | None:
+    ctypes, CREDENTIAL, api = _wincred_api()
+    p = ctypes.POINTER(CREDENTIAL)()
+    if not api.CredReadW(f"{SERVICE}:{name}", CRED_TYPE_GENERIC, 0, ctypes.byref(p)):
+        return None
+    try:
+        return ctypes.string_at(p.contents.CredentialBlob, p.contents.CredentialBlobSize)
+    finally:
+        api.CredFree(p)
+
+
+def _wincred_put(name: str, key: bytes) -> bool:
+    ctypes, CREDENTIAL, api = _wincred_api()
+    blob = ctypes.create_string_buffer(key, len(key))
+    cred = CREDENTIAL(Type=CRED_TYPE_GENERIC, TargetName=f"{SERVICE}:{name}", CredentialBlobSize=len(key),
+                      CredentialBlob=ctypes.cast(blob, ctypes.POINTER(ctypes.c_char)),
+                      Persist=CRED_PERSIST_LOCAL_MACHINE, UserName="veil")
+    return bool(api.CredWriteW(ctypes.byref(cred), 0)) and _wincred_get(name) == key
+
+
+def _wincred_delete(name: str) -> None:
+    _, _, api = _wincred_api()
+    api.CredDeleteW(f"{SERVICE}:{name}", CRED_TYPE_GENERIC, 0)
 
 
 def _secret_service() -> bool:
@@ -110,6 +164,13 @@ def get_key(name: str, home: str, initial: bytes | None = None) -> bytes:
     env = os.environ.get(_env_name(name))
     if env:
         return base64.b64decode(env)
+    if _wincred():
+        key = _wincred_get(name)
+        if key:
+            return key
+        key = initial or secrets.token_bytes(32)
+        if _wincred_put(name, key):
+            return key
     if sys.platform == "darwin" and shutil.which("security"):
         key = _keychain_get(name)
         if key:
@@ -131,6 +192,8 @@ def set_key(name: str, home: str, key: bytes) -> str:
     """Replace key `name`. Returns where it was stored ('env' means: refused, env wins)."""
     if os.environ.get(_env_name(name)):
         return "env"
+    if _wincred() and _wincred_put(name, key):
+        return "credential-manager"
     if sys.platform == "darwin" and shutil.which("security") and _keychain_put(name, key):
         return "keychain"
     if _secret_service() and _secret_tool_put(name, key):
@@ -149,6 +212,10 @@ def peek_key(name: str, home: str) -> bytes | None:
     env = os.environ.get(_env_name(name))
     if env:
         return base64.b64decode(env)
+    if _wincred():
+        key = _wincred_get(name)
+        if key:
+            return key
     if sys.platform == "darwin" and shutil.which("security"):
         key = _keychain_get(name)
         if key:
@@ -162,6 +229,8 @@ def peek_key(name: str, home: str) -> bytes | None:
 
 
 def delete_key(name: str, home: str) -> None:
+    if _wincred():
+        _wincred_delete(name)
     if sys.platform == "darwin" and shutil.which("security") and _keychain_args() is not None:
         subprocess.run(["security", "delete-generic-password", "-s", SERVICE, "-a", name, *_keychain_args()],
                        capture_output=True, timeout=30)

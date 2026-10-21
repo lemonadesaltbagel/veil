@@ -119,6 +119,7 @@ jobs:
         include:
           - {os: macos-latest, python: "3.13"}
           - {os: ubuntu-latest, python: "3.11"}
+          - {os: windows-latest, python: "3.12"}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -128,4 +129,5 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - name: Tests (database tests skip when unreachable)
-        run: uv run pytest -q
+        shell: bash
+        run: uv run pytest -q -rs

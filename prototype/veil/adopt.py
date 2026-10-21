@@ -54,6 +54,12 @@ def redact_uri(uri: str) -> str:
     return re.sub(r"//([^:@/]+)(:[^@/]*)?@", r"//\1:***@", uri)
 
 
+def _q(arg: str) -> str:
+    """Quote for the hook shell (sh on macOS/Linux, Git Bash or cmd on Windows): double
+    quotes keep spaces and Windows backslashes (C:\\Users\\...) intact in all of them."""
+    return f'"{arg}"' if " " in arg or "\\" in arg else arg
+
+
 def state_home() -> str:
     from .state import home
     return home()
@@ -84,9 +90,9 @@ def write_claude_settings(project: str, port: int, hooks: bool = True, deny_env:
         for event, kind in (("PreToolUse", "pre"), ("PostToolUse", "post")):
             entries = [e for e in all_hooks.get(event, [])
                        if "veil.cli hook" not in json.dumps(e) and "veil.hookclient" not in json.dumps(e)]
-            fast = " ".join(f'"{c}"' if " " in c else c for c in [sys.executable, "-m", "veil.hookclient"])
+            fast = " ".join(_q(c) for c in [sys.executable, "-m", "veil.hookclient"])
             home = state_home()
-            home_arg = f' --home "{home}"' if " " in home else f" --home {home}"
+            home_arg = f" --home {_q(home)}"
             entries.append({"matcher": "*", "hooks": [{"type": "command",
                                                        "command": f"{fast} {kind} --port {port}{home_arg}"}]})
             all_hooks[event] = entries
@@ -243,3 +249,71 @@ def systemd_uninstall() -> bool:
 def systemd_status() -> str:
     r = subprocess.run(["systemctl", "--user", "is-active", UNIT], capture_output=True, text=True)
     return r.stdout.strip() or "not loaded"
+
+
+# -- Windows: a launcher in the user's Startup folder (no admin rights needed) --------
+
+def startup_dir() -> str:
+    return os.environ.get("VEIL_STARTUP_DIR") or os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~")), "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+
+
+def windows_launcher_path() -> str:
+    return os.path.join(startup_dir(), f"{LABEL}.vbs")
+
+
+def _windows_args(port: int, upstream: str, ner: bool, home: str, capture: str | None) -> list[str]:
+    exe = sys.executable
+    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    exe = pyw if os.path.exists(pyw) else exe  # no console window
+    return [exe, "-m", "veil.cli", "proxy", "--port", str(port), "--upstream", upstream,
+            "--pid-file", os.path.join(home, "proxy.pid")] + (["--ner"] if ner else []) \
+        + (["--capture", capture] if capture else [])
+
+
+def windows_launcher(port: int, upstream: str, ner: bool, home: str, capture: str | None = None) -> str:
+    """VBScript: sets VEIL_HOME and starts the proxy hidden at logon. Keys come from the
+    Credential Manager; environment keys are deliberately not written into the script."""
+    vbs = lambda s: '"' + s.replace('"', '""') + '"'
+    cmdline = " ".join('"' + a + '"' for a in _windows_args(port, upstream, ner, home, capture))
+    return "\r\n".join([
+        "' veil proxy launcher (veil service install); remove with: veil service uninstall",
+        'Set sh = CreateObject("WScript.Shell")',
+        f'sh.Environment("Process")("VEIL_HOME") = {vbs(home)}',
+        'sh.Environment("Process")("NO_PROXY") = "127.0.0.1,localhost"',
+        f"sh.Run {vbs(cmdline)}, 0, False", ""])
+
+
+def windows_install(port: int, upstream: str, ner: bool, home: str, start: bool = True,
+                    capture: str | None = None) -> str:
+    os.makedirs(startup_dir(), exist_ok=True)
+    path = windows_launcher_path()
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(windows_launcher(port, upstream, ner, home, capture))
+    if start and health(port) is None:
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(_windows_args(port, upstream, ner, home, capture), creationflags=flags, close_fds=True,
+                         env={**os.environ, "VEIL_HOME": home, "NO_PROXY": "127.0.0.1,localhost"},
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    return path
+
+
+def windows_uninstall(home: str) -> bool:
+    import signal
+    path, found = windows_launcher_path(), False
+    if os.path.exists(path):
+        os.remove(path)
+        found = True
+    pid_file = os.path.join(home, "proxy.pid")
+    try:
+        os.kill(int(open(pid_file).read().strip()), signal.SIGTERM)  # TerminateProcess on Windows
+        found = True
+    except (OSError, ValueError):
+        pass
+    return found
+
+
+def windows_status(port: int = 8787) -> str:
+    installed = os.path.exists(windows_launcher_path())
+    running = health(port) is not None
+    return f"{'installed' if installed else 'not installed'} (Startup folder), {'running' if running else 'not running'}"

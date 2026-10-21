@@ -98,7 +98,7 @@ def _status(veil, args) -> int:
     from . import adopt
     h = adopt.health(args.port)
     print(f"proxy    {'up ' + json.dumps(h) if h else 'DOWN on :' + str(args.port)}")
-    print(f"service  {adopt.systemd_status() if sys.platform.startswith('linux') else adopt.service_status()}")
+    print(f"service  {_service_status(args.port)}")
     from . import display
     print(f"display  {display.configured_mode(state.home())} (answers show {'real values' if display.configured_mode(state.home()) == 'real' else 'pseudonyms'})")
     print(f"keys     {'env' if os.environ.get('VEIL_VAULT_KEY') else 'keychain/file'}; vault {len(veil.vault.tokens())} tokens, "
@@ -176,9 +176,25 @@ def _team(args) -> int:
     return 0
 
 
+def _service_status(port: int) -> str:
+    from . import adopt
+    if sys.platform == "win32":
+        return adopt.windows_status(port)
+    return adopt.systemd_status() if sys.platform.startswith("linux") else adopt.service_status()
+
+
 def _service(args) -> int:
     from . import adopt
     linux = sys.platform.startswith("linux")
+    if sys.platform == "win32":
+        if args.action == "install":
+            path = adopt.windows_install(args.port, args.upstream, args.ner, state.home(), capture=args.capture)
+            print(f"installed {path}; status: {adopt.windows_status(args.port)}")
+        elif args.action == "uninstall":
+            print("removed" if adopt.windows_uninstall(state.home()) else "not installed")
+        else:
+            print(adopt.windows_status(args.port))
+        return 0
     if args.action == "install":
         if linux:
             path = adopt.systemd_install(args.port, args.upstream, args.ner, state.home(), capture=args.capture)
@@ -238,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--openai-upstream", metavar="URL",
                    help="OpenAI-format upstream for /chat/completions (e.g. https://api.deepseek.com)")
     s.add_argument("--bedrock-upstream", metavar="URL", help="e.g. https://bedrock-runtime.us-east-1.amazonaws.com")
+    s.add_argument("--pid-file", metavar="PATH", help="write the process id here (removed on exit)")
     s.add_argument("--reseed-interval", type=float, default=30,
                    help="seconds between change checks of remembered sources (0 = off)")
     s.add_argument("--vertex-upstream", metavar="URL", help="e.g. https://us-east5-aiplatform.googleapis.com")
@@ -355,10 +372,21 @@ def main(argv: list[str] | None = None) -> int:
             veil.reseeder.start()
             print(f"[veil] re-seeding {len(sources)} source(s) on change (checked every {args.reseed_interval:g}s)",
                   file=sys.stderr)
+        if args.pid_file:
+            import os
+            with open(args.pid_file, "w") as f:
+                f.write(str(os.getpid()))
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        finally:
+            if args.pid_file:
+                import os
+                try:
+                    os.remove(args.pid_file)
+                except OSError:
+                    pass
     elif args.cmd == "hook":
         return _hook(veil, args.kind)
     return 0
