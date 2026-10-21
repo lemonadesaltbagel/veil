@@ -5,7 +5,7 @@ Privacy middleware for AI coding agents. The model sees consistent pseudonyms
 and commands the agent runs locally get the real values back (shell- and SQL-safe).
 
 ```sh
-pip install "veil-proxy[postgres]"    # extras: postgres, mysql, mongo, redis, bedrock, ner, all
+pip install "veil-proxy[postgres]"    # extras: postgres, mysql, mongo, redis, bedrock, ner, mssql, all
                                       # (installs the `veil` and `veil-hook` commands; import name `veil`)
 veil init ~/code/myapp                # seed from .env DB URLs, SQLite, fixtures; wire Claude Code
 veil service install                  # proxy as a LaunchAgent (macOS) / systemd user unit (Linux)
@@ -19,15 +19,26 @@ https://github.com/lemonadesaltbagel/veil):
   a scanner that also decodes escaped and transformed text), and every session still found the bug.
 - Seeding from your own data lets **1.8%** of names and contact details through, versus 80.4% for
   pattern matching (1,000 labelled records).
-- **20/20** one-command bypass transforms are contained, and restored values are escaped for their
-  shell/SQL context (35/35 injection tests).
+- **21/21** one-command bypass transforms are contained. Restored values are escaped for every
+  language layer they pass through (shell, heredocs, `python -c`, `node -e`, SQL, `bash -c`...):
+  35/35 injection tests, and 55,000 fuzzed nested commands executed with 0 code executions.
 - Prompt caching keeps working (74–89% cache hits); about 19 ms overhead per request at 40k seeded
-  values.
+  values, and 37 + 68 ms per 234 KB request at 1.2 million seeded values (1.1 GB).
 
 One local proxy (default `127.0.0.1:8787`) serves every client, routed by path:
 Anthropic Messages (Claude Code, Agent SDK), Amazon Bedrock InvokeModel (binary eventstream),
-Google Vertex rawPredict, OpenAI Chat Completions (Aider, Continue, OpenAI SDK) and
-OpenAI Responses (Codex CLI).
+Google Vertex rawPredict, Microsoft Foundry (`/foundry`), Claude Platform on AWS (`/anthropic-aws`),
+OpenAI Chat Completions (Aider, Continue, OpenAI SDK) and OpenAI Responses (Codex CLI).
+
+Seeds from Postgres, MySQL/MariaDB, SQLite, SQL Server (native sensitivity labels), MongoDB, Redis,
+Elasticsearch/OpenSearch and fixture files, plus personal fields declared in code (Prisma, Django,
+Rails, SQLAlchemy, OpenAPI, protobuf), and re-seeds automatically when the data changes.
+
+```sh
+veil display tokens        # screen sharing: answers keep pseudonyms (veil display real to undo)
+veil quasi redact          # also pseudonymise rare cities, postal codes, birth dates, employers
+veil keys rotate           # re-encrypt the vault; --token-secret for new pseudonyms
+```
 
 Teams: `veil team export | join` shares the pseudonym secret (never the vault key);
 `veil team managed-settings` writes a Claude Code `managed-settings.d/` drop-in that pins the
@@ -35,5 +46,5 @@ proxy with `allowedProviders: ["customEndpoint"]`.
 
 Optional NER for free text: `pip install "veil-proxy[ner]"` then `veil ner-model fetch`.
 
-Status: alpha. Keys: macOS Keychain / Linux Secret Service (`secret-tool`), or `VEIL_VAULT_KEY` /
-`VEIL_TOKEN_SECRET` (base64). State: `~/.veil` (encrypted vault).
+Status: alpha. Keys: macOS Keychain / Linux Secret Service (`secret-tool`) / Windows Credential
+Manager, or `VEIL_VAULT_KEY` / `VEIL_TOKEN_SECRET` (base64). State: `~/.veil` (encrypted vault).
