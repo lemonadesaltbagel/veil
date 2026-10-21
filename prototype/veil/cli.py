@@ -167,29 +167,46 @@ def _team(args) -> int:
     from .keys import get_key, set_key
     pw = os.environ.get(args.passphrase_env) if args.passphrase_env else None
     cfg = state.config()
+    from . import secretref
     if args.action == "export":
-        print(team.export_bundle(get_key("token-secret", state.home()), cfg.get("allow", []), pw))
-        print("share via a password manager; it lets teammates derive the same pseudonyms "
-              "(not decrypt anyone's vault)", file=sys.stderr)
-    elif args.action == "join":
-        if not args.value:
-            raise SystemExit("usage: veil team join <bundle>")
-        secret, allow = team.import_bundle(args.value[0], pw)
-        vault_path = os.path.join(state.home(), "vault.db")
+        bundle = team.export_bundle(get_key("token-secret", state.home()), cfg.get("allow", []), pw)
+        if args.to:
+            try:
+                secretref.write(args.to, bundle)
+            except secretref.RefError as e:
+                raise SystemExit(f"veil: {e}")
+            print(f"team bundle written to {args.to}; teammates run: veil team join --from {args.to}", file=sys.stderr)
+        else:
+            print(bundle)
+            print("share via a password manager; it lets teammates derive the same pseudonyms "
+                  "(not decrypt anyone's vault)", file=sys.stderr)
+    elif args.action in ("join", "sync"):
+        ref = args.source or (cfg.get("team_source") if args.action == "sync" else None)
+        if args.action == "sync" and not ref:
+            raise SystemExit("no team source remembered: veil team join --from REF")
+        if not ref and not args.value:
+            raise SystemExit("usage: veil team join <bundle> | veil team join --from REF")
+        try:
+            secret, allow = team.import_bundle(secretref.read(ref) if ref else args.value[0], pw)
+        except secretref.RefError as e:
+            raise SystemExit(f"veil: {e}")
+        current = get_key("token-secret", state.home())
         veil = state.load()
-        if veil.vault.tokens() and not args.reset_vault:
+        changed = secret != current
+        if changed and veil.vault.tokens() and not (args.reset_vault or args.action == "sync"):
             raise SystemExit(f"vault already holds {len(veil.vault.tokens())} tokens derived from another secret; "
-                             "re-run with --reset-vault to re-derive them with the team secret")
-        where = set_key("token-secret", state.home(), secret)
-        if where == "env":
-            raise SystemExit("VEIL_TOKEN_SECRET is set in the environment; update it there instead")
-        if args.reset_vault:
-            veil.vault._db.execute("DELETE FROM entities_v2")
-            veil.vault._db.commit()
+                             "re-run with --reset-vault (old pseudonyms are retired: they still restore)")
+        if changed:
+            where = set_key("token-secret", state.home(), secret)
+            if where == "env":
+                raise SystemExit("VEIL_TOKEN_SECRET is set in the environment; update it there instead")
+            retired = veil.vault.retire_all()  # issued under the old secret: still restored, never issued again
         cfg["allow"] = sorted(set(cfg.get("allow", [])) | set(allow))
+        if ref:
+            cfg["team_source"] = ref
         state.save_config(cfg)
-        print(f"joined: token secret stored in {where}; allowlist {len(cfg['allow'])} entries"
-              + ("; vault reset" if args.reset_vault else ""), file=sys.stderr)
+        print(("team secret updated" + (f"; {retired} old pseudonyms retired" if retired else "") if changed
+               else "team secret unchanged") + f"; allowlist {len(cfg['allow'])} entries", file=sys.stderr)
     elif args.action == "allow":
         cfg["allow"] = sorted(set(cfg.get("allow", [])) | set(args.value))
         state.save_config(cfg)
@@ -303,7 +320,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--mcp", action="store_true", help="register `veil mcp-db` with Claude Code for each database "
                    "(local scope: never committed; sources by number: no credentials in the config)")
     s = sub.add_parser("status"); s.add_argument("project", nargs="?", default="."); s.add_argument("--port", type=int, default=8787)
-    s = sub.add_parser("team"); s.add_argument("action", choices=["export", "join", "allow", "managed-settings"])
+    s = sub.add_parser("team"); s.add_argument("action", choices=["export", "join", "sync", "allow", "managed-settings"])
+    s.add_argument("--to", metavar="REF", help="export into a secrets manager: op://, aws-sm://, gcp-sm://, vault://, file:")
+    s.add_argument("--from", dest="source", metavar="REF", help="join from a secrets manager (remembered for `team sync`)")
     s.add_argument("value", nargs="*"); s.add_argument("--passphrase-env", metavar="VAR")
     s.add_argument("--reset-vault", action="store_true"); s.add_argument("--port", type=int, default=8787)
     s.add_argument("--no-hooks", action="store_true"); s.add_argument("--lock-hooks", action="store_true")
