@@ -1,0 +1,27 @@
+# secrets and local state
+.env
+.env.*
+.veil/
+.run/
+
+# Python / build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+prototype/dist/
+
+# downloaded or generated, reproducible via scripts/ (third-party data: not redistributed)
+prototype/datasets/*
+!prototype/datasets/pg_app_schema.sql
+!prototype/datasets/mysql_app_schema.sql
+prototype/models/
+prototype/captures/
+prototype/demo/
+references/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
