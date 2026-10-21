@@ -168,7 +168,7 @@ class SQLSource:
             self._deadline["t"] = time.monotonic() + 30
         cur = self.conn.cursor()
         try:
-            cur.execute(sql, params)
+            cur.execute(sql, tuple(params))  # pymssql wants a tuple
             cols = [d[0] for d in cur.description or []]
             rows = cur.fetchmany(limit + 1) if cols else []
         finally:

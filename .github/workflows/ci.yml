@@ -45,6 +45,26 @@ jobs:
         ports: ["57017:27017"]
         options: >-
           --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'" --health-interval 5s --health-timeout 10s --health-retries 20
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Veil_Test_Pw1!"
+        ports: ["51433:1433"]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Veil_Test_Pw1!' -Q 'SELECT 1'" --health-interval 10s --health-timeout 10s --health-retries 30
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports: ["59200:9200"]
+        options: >-
+          --health-cmd "curl -fs http://localhost:9200/_cluster/health" --health-interval 10s --health-timeout 5s --health-retries 30
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports: ["58000:8000"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -54,7 +74,7 @@ jobs:
       - name: Install
         run: |
           sudo apt-get install -y --no-install-recommends sqlite3 >/dev/null
-          uv sync --locked
+          uv sync --locked --extra mssql
       - name: Cache datasets
         uses: actions/cache@v4
         with:
