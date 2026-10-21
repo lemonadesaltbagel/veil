@@ -30,13 +30,16 @@ def classify(table: str, column: str) -> str | None:
     return classify_name(table, column)
 
 
-def seed(known: KnownValues, uri: str) -> Report:
+def seed(known: KnownValues, uri: str, delta: dict | None = None) -> Report:
+    """`delta` (re-seeding): per-table cursors, updated in place. Sources that support it
+    (SQLite rowid, Postgres xmin, MySQL updated_at / integer key, MongoDB _id) then read
+    only rows past the cursor; the others always read everything."""
     u = urlparse(uri)
     if u.scheme in ("postgres", "postgresql"):
-        return seed_postgres(known, uri)
+        return seed_postgres(known, uri, delta=delta)
     if u.scheme in ("mysql", "mariadb"):
         return seed_mysql(known, u.hostname or "127.0.0.1", unquote(u.username or "root"),
-                          unquote(u.password or ""), u.path.lstrip("/"), u.port or 3306)
+                          unquote(u.password or ""), u.path.lstrip("/"), u.port or 3306, delta=delta)
     if u.scheme == "snowflake":
         from .warehouse import seed_snowflake
         return seed_snowflake(known, uri)
@@ -58,12 +61,12 @@ def seed(known: KnownValues, uri: str) -> Report:
     if u.scheme in ("redis", "rediss"):
         return seed_redis(known, uri)
     if u.scheme in ("mongodb", "mongodb+srv"):
-        return seed_mongo(known, uri, u.path.lstrip("/") or "test")
+        return seed_mongo(known, uri, u.path.lstrip("/") or "test", delta=delta)
     if u.scheme in ("", "sqlite", "file") or len(u.scheme) == 1:  # C:\data\app.db: a drive, not a scheme
         path = u.path if u.scheme in ("sqlite", "file") else uri
         if os.path.isdir(path) or not path.endswith((".db", ".sqlite", ".sqlite3")):
             return seed_files(known, [path])
-        return seed_sqlite(known, path)
+        return seed_sqlite(known, path, delta=delta)
     raise ValueError(f"unsupported source: {u.scheme}://")
 
 
@@ -79,7 +82,7 @@ def seed_environment(known: KnownValues) -> list[str]:
     for key, kind in [("user.email", "email"), ("user.name", "name")]:
         try:
             value = subprocess.run(["git", "config", "--global", key], capture_output=True,
-                                   text=True, timeout=5).stdout.strip()
+                                   encoding="utf-8", errors="replace", timeout=5).stdout.strip()
         except (OSError, subprocess.TimeoutExpired):
             value = ""
         if value:

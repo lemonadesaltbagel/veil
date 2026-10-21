@@ -122,3 +122,42 @@ def test_live_fingerprint_changes_on_insert(kind):
         assert _wait(lambda: fingerprint(url) != before, timeout=8)
     finally:
         undo()
+
+
+def test_delta_reads_only_new_rows_and_keeps_fk_grouping(tmp_path):
+    import sqlite3
+    from veil.sources import seed
+    db = tmp_path / "shop.db"
+    con = sqlite3.connect(db)
+    con.execute("create table customers (id integer primary key, full_name text, email text)")
+    con.execute("create table orders (id integer primary key, customer_id integer references customers(id), "
+                "ship_address text)")
+    con.executemany("insert into customers values (?, ?, ?)", [(i, f"Person Number{i} Smith", f"p{i}@shop.example.net")
+                                                               for i in range(1, 501)])
+    con.commit()
+    k, cursor = KnownValues(), {}
+    seed(k, str(db), delta=cursor)                            # full read, records cursors
+    assert cursor == {"customers": 500}
+    con.execute("insert into customers values (501, 'Leonie Köhler', 'leonekohler@surfeu.de')")
+    con.execute("insert into orders values (1, 3, 'Theodor-Heuss-Straße 34')")   # an *old* customer's order
+    con.commit()
+    k2 = k.copy()
+    report = seed(k2, str(db), delta=cursor)                  # delta: two new rows only
+    assert cursor == {"customers": 501, "orders": 1} and report.added <= 4
+    assert k2.group_of("leonekohler@surfeu.de") == "customers:501"
+    assert k2.group_of("Theodor-Heuss-Straße 34") == k2.group_of("p3@shop.example.net") == "customers:3"
+
+
+@pytest.mark.parametrize("kind", ["postgres", "mysql", "mongo"])
+def test_live_delta_cursors(kind):
+    from veil.sources import seed
+    try:
+        fingerprint(LIVE[kind])
+    except Exception as e:
+        pytest.skip(f"{kind} not available: {type(e).__name__}")
+    k, cursor = KnownValues(), {}
+    seed(k, LIVE[kind], delta=cursor)
+    assert cursor, "a full read records cursors"
+    before = len(k)
+    report = seed(k, LIVE[kind], delta=cursor)              # nothing new since: reads (almost) nothing
+    assert len(k) == before and report.added == 0

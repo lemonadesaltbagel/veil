@@ -95,6 +95,31 @@ class _Index:
         self.tail_anchors = Matcher([v[-6:][::-1] for v in cut], bounded=False)  # reversed text
         self.longest = max(map(len, cut), default=0)
 
+    @classmethod
+    def grown(cls, base: "_Index", known, values: list[str]) -> "_Index":
+        """`base` plus a few new seeded values, without rebuilding (copy-on-write: `base`
+        may still be serving requests)."""
+        ix = cls.__new__(cls)
+        ix.plain = known.matcher()
+        ix.kind_of = lambda v: known._entries[v][0]
+        ix._canonical = known.canonical
+        ix.norm_values = {m: dict(d) for m, d in base.norm_values.items()}
+        needles = []
+        for value in values:
+            if len(squash(value)) >= 8:
+                w, c = norm(value), squash(value)
+                w = value if w == value else w
+                ix.norm_values["w"].setdefault(w, value)
+                ix.norm_values["c"].setdefault(w if c == w else c, value)
+                needles += [w, c]
+        both = base.norm["w"].copy_with(needles)
+        ix.norm = {"w": both, "c": both}
+        cut = [v for v in values if len(v) >= 8 and known._entries[v][0] in TRUNCATABLE]
+        ix.heads, ix.tails = base.heads.with_values(cut), base.tails.with_values(cut)
+        ix.tail_anchors = base.tail_anchors.copy_with([v[-6:][::-1] for v in cut])
+        ix.longest = max([base.longest, *map(len, cut)])
+        return ix
+
     def resolve(self, needle: str) -> tuple[str, str, str]:
         """needle -> (real value, kind, form)"""
         value = self._canonical(needle)
@@ -106,8 +131,13 @@ def seeded_index(known) -> _Index:
     it before swapping a new set in, so no request pays for the rebuild."""
     cached = getattr(known, "_guard_index", None)
     if cached is None or cached[0] != len(known):
-        cached = (len(known), _Index(known=known))
-        known._guard_index = cached
+        base, new = known._base_guard, known._new_values
+        if base is not None and len(new) < max(1000, len(known) // 10):
+            ix = _Index.grown(base[1], known, list(new))  # a re-seed added a few values
+        else:
+            ix = _Index(known=known)
+        cached = (len(known), ix)
+        known._guard_index, known._base_guard, known._new_values = cached, None, []
     return cached[1]
 
 

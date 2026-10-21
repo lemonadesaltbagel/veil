@@ -62,3 +62,36 @@ def test_token_pattern_is_regex_compatible_and_incremental():
     assert veil.rehydrate(toks[5]) == "person5@corp.example.com"
     new = veil.vault.token_for("address", "1 Brand New Road")
     assert veil.rehydrate(f"lives at {new}.") == "lives at 1 Brand New Road."
+
+
+def test_incremental_indexes_match_a_full_rebuild():
+    import base64
+    import json
+    from veil.anthropic import redact_request
+    from veil.detect import KnownValues
+    from veil.guard import Guard, seeded_index
+    old = [(f"person{i}@corp.example.com", f"Person Number{i} Smith") for i in range(3000)]
+    new = [("leonekohler@surfeu.de", "Leonie Köhler"), ("bjorn.hansen@yahoo.no", "Bjørn Hansen")]
+    base = KnownValues()
+    for i, (e, n) in enumerate(old):
+        base.add(e, "email", f"c:{i}"); base.add(n, "name", f"c:{i}")
+    base.matcher(); seeded_index(base)                          # built, as in a running proxy
+    grown = base.copy()
+    full = KnownValues()
+    for k in (grown, full):
+        for i, (e, n) in enumerate(old + new):
+            k.add(e, "email", f"c:{i}"); k.add(n, "name", f"c:{i}")
+    assert grown._base_pattern is not None and len(grown._new_values) < 50   # the incremental path
+    texts = ["mail leonekohler@surfeu.de and person7@corp.example.com",
+             "customer=\"Leonie Köh\nnext line",                  # truncated head
+             "LEONIE KÖHLER was here",                             # transformed
+             base64.b64encode(b'{"u":"bjorn.hansen@yahoo.no"}').decode()]
+    outs = []
+    for k in (grown, full):
+        veil = Veil(Vault(":memory:", b"same"), k)
+        body = redact_request(veil, {"model": "m", "messages": [{"role": "user", "content": t} for t in texts]})
+        guarded, findings = Guard(veil).enforce(body)
+        outs.append((json.dumps(guarded, ensure_ascii=False), sorted((f.kind, f.form) for f in findings)))
+    assert outs[0] == outs[1]
+    assert "leonekohler" not in outs[0][0] and "Köh" not in outs[0][0] and "LEONIE" not in outs[0][0]
+    assert type(seeded_index(grown)).__name__ == "_Index" and len(base.matcher()) < len(grown.matcher())

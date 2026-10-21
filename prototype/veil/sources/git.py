@@ -30,7 +30,7 @@ def people(repo: str, max_commits: int = 200_000) -> dict[str, set[str]]:
     """email (lower-case) -> names used with it."""
     fmt = SEP.join(["%an", "%ae", "%cn", "%ce", "%(trailers:key=Co-authored-by,valueonly=false)"]) + "\x1e"
     r = subprocess.run(["git", "-C", repo, "log", "--all", f"-n{max_commits}", f"--format={fmt}"],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, encoding="utf-8", errors="replace", timeout=120)  # not the locale (cp1252)
     if r.returncode != 0:
         raise ValueError(f"not a git repository: {repo}")
     out: dict[str, set[str]] = {}

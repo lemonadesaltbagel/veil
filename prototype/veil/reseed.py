@@ -10,6 +10,8 @@ So the proxy re-seeds in the background:
 * when a fingerprint changes (or `full_every` seconds have passed) that source is
   re-seeded into a copy of the known values, which is then swapped in atomically,
   so requests never see a half-built set;
+* in between hourly full reads, sources that can say "what's new" are read from a
+  cursor only: SQLite rowid, Postgres xmin, MySQL updated_at / integer key, MongoDB _id;
 * the result is persisted (known.enc) so hook processes see it too;
 * matcher and guard indexes are built in this thread before the swap, and the
   interval stretches to 10x the last re-seed's duration (1.2M values: ~6 s).
@@ -162,6 +164,7 @@ class Reseeder(threading.Thread):
         self.veil, self.sources, self.interval, self.full_every = veil, list(sources), interval, full_every
         self.save, self.log, self.on_swap = save, log, on_swap
         self.prints: dict[str, str] = {}
+        self.cursors: dict[str, dict] = {}  # per source: per-table delta cursors (rows read up to here)
         self.last_full: dict[str, float] = {}
         self._stop = threading.Event()
         self.runs = 0
@@ -186,8 +189,11 @@ class Reseeder(threading.Thread):
             started = time.monotonic()
             new = self.veil.known.copy()
             before = len(new)
+            cursor = self.cursors.setdefault(src, {})
+            if first or stale:
+                cursor.clear()  # full read (refreshes every cursor); in between, only newer rows
             try:
-                seed(new, src)
+                seed(new, src, delta=cursor)
             except Exception as e:
                 print(f"[veil] reseed: {_label(src)} failed ({type(e).__name__})", file=self.log)
                 continue

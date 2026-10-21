@@ -10,6 +10,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import pathlib
+import re
 import sqlite3
 import uuid
 from typing import Any, Callable, Iterable
@@ -32,8 +33,8 @@ def _norm(v: Any) -> Any:
 
 
 def run(known: KnownValues, containers: list[Container],
-        fetch: Callable[[Container, list[str]], Iterable[dict]]) -> Report:
-    seeder = Seeder(known)
+        fetch: Callable[[Container, list[str]], Iterable[dict]], delta: dict | None = None) -> Report:
+    seeder = Seeder(known, delta=bool(delta))
     plans = {c.name: plan(c) for c in containers}
     for c in seeder.order(containers, plans):
         fields = plans[c.name]
@@ -46,18 +47,27 @@ def run(known: KnownValues, containers: list[Container],
 
 # -- SQLite -------------------------------------------------------------------
 
-def seed_sqlite(known: KnownValues, path: str, max_rows: int = 500_000) -> Report:
+def seed_sqlite(known: KnownValues, path: str, max_rows: int = 500_000, delta: dict | None = None) -> Report:
+    """delta: {table: last rowid}, updated in place; only newer rows are read when present."""
     db = sqlite3.connect(pathlib.Path(os.path.abspath(path)).as_uri() + "?mode=ro", uri=True)  # Windows-safe URI
     db.row_factory = sqlite3.Row
     q = lambda s: '"' + s.replace('"', '""') + '"'
     keys: dict[str, str] = {}
 
-    def select(table: str, cols: list[str], limit: int):
+    def select(table: str, cols: list[str], limit: int, cursor: dict | None = None):
         sel = ", ".join([f"{q(keys[table])} AS __key"] + [q(c) for c in cols])
-        for r in db.execute(f"SELECT {sel} FROM {q(table)} LIMIT {int(limit)}"):
-            yield dict(r)
+        if cursor is None or table in rowless:
+            yield from (dict(r) for r in db.execute(f"SELECT {sel} FROM {q(table)} LIMIT {int(limit)}"))
+            return
+        last = cursor.get(table, 0)
+        for r in db.execute(f"SELECT rowid AS __rid, {sel} FROM {q(table)} WHERE rowid > ? ORDER BY rowid "
+                            f"LIMIT {int(limit)}", (last,)):
+            cursor[table] = max(cursor.get(table, 0), r["__rid"])
+            yield {k: r[k] for k in r.keys() if k != "__rid"}
 
     containers = []
+    rowless = {n for (n, sql) in db.execute("SELECT name, sql FROM sqlite_master WHERE type='table'")
+               if "WITHOUT ROWID" in (sql or "").upper()}
     for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
         info = db.execute(f"PRAGMA table_info({q(table)})").fetchall()
         pks = [r["name"] for r in info if r["pk"]]
@@ -77,7 +87,8 @@ def seed_sqlite(known: KnownValues, path: str, max_rows: int = 500_000) -> Repor
         if text_cols:
             sample = list(select(table, sorted(set(text_cols) | set(fks)), 200))
             containers.append(Container(table, "__key", text_cols, sample, fks))
-    return run(known, containers, lambda c, cols: select(c.name, sorted(set(cols) | set(c.fks)), max_rows))
+    return run(known, containers, lambda c, cols: select(c.name, sorted(set(cols) | set(c.fks)), max_rows, delta),
+               delta)
 
 
 # -- PostgreSQL -------------------------------------------------------------
@@ -121,7 +132,10 @@ def _pg_name(schema: str, table: str) -> str:
     return table if schema == "public" else f"{schema}.{table}"
 
 
-def seed_postgres(known: KnownValues, dsn: str, max_rows: int = 500_000) -> Report:
+def seed_postgres(known: KnownValues, dsn: str, max_rows: int = 500_000, delta: dict | None = None) -> Report:
+    """delta: {table: highest xmin seen}; xmin changes on insert *and* update, so a
+    re-seed reads only rows written since (VACUUM FREEZE / wraparound: the hourly full
+    re-seed covers them)."""
     import psycopg
     from psycopg import sql
     from psycopg.rows import dict_row
@@ -154,14 +168,20 @@ def seed_postgres(known: KnownValues, dsn: str, max_rows: int = 500_000) -> Repo
         schema, table, col, fschema, ftable = r.values()
         fks.setdefault((schema, table), {})[col] = (_pg_name(fschema, ftable), (schema, table, col) in unique)
 
-    def select(st: tuple[str, str], cols: list[str], limit: int):
+    def select(st: tuple[str, str], cols: list[str], limit: int, cursor: dict | None = None):
         key = keys.get(st)
         key_expr = sql.Identifier(key) if key else sql.SQL("ctid::text")
-        q = sql.SQL("SELECT {} AS __key{} FROM {}.{} LIMIT {}").format(
+        name = f"{st[0]}.{st[1]}"
+        where = sql.SQL("")
+        if cursor is not None and name in cursor:
+            where = sql.SQL(" WHERE xmin::text::bigint > {}").format(sql.Literal(cursor[name]))
+        q = sql.SQL("SELECT xmin::text::bigint AS __xmin, {} AS __key{} FROM {}.{}{} LIMIT {}").format(
             key_expr, sql.SQL("").join(sql.SQL(", ") + sql.Identifier(c) for c in cols),
-            sql.Identifier(st[0]), sql.Identifier(st[1]), sql.Literal(limit))
+            sql.Identifier(st[0]), sql.Identifier(st[1]), where, sql.Literal(limit))
         for row in conn.execute(q):
-            yield {k: _norm(v) for k, v in row.items()}
+            if cursor is not None:
+                cursor[name] = max(cursor.get(name, 0), row["__xmin"])
+            yield {k: _norm(v) for k, v in row.items() if k != "__xmin"}
 
     containers, by_name = [], {}
     for st, cols in tables.items():
@@ -174,14 +194,15 @@ def seed_postgres(known: KnownValues, dsn: str, max_rows: int = 500_000) -> Repo
         by_name[c.name] = st
 
     def fetch(c: Container, cols: list[str]):
-        return select(by_name[c.name], sorted(set(cols) | set(c.fks)), max_rows)
-    return run(known, containers, fetch)
+        return select(by_name[c.name], sorted(set(cols) | set(c.fks)), max_rows, delta)
+    return run(known, containers, fetch, delta)
 
 
 # -- MySQL / MariaDB ----------------------------------------------------------
 
 def seed_mysql(known: KnownValues, host: str, user: str, password: str, database: str,
-               port: int = 3306, max_rows: int = 500_000) -> Report:
+               port: int = 3306, max_rows: int = 500_000, delta: dict | None = None) -> Report:
+    """delta: {table: last value of its updated_at-style column, or of an integer primary key}."""
     import pymysql
 
     conn = pymysql.connect(host=host, port=port, user=user, password=password, database=database,
@@ -198,6 +219,10 @@ def seed_mysql(known: KnownValues, host: str, user: str, password: str, database
                        WHERE TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IS NOT NULL""")
         fk_rows = cur.fetchall()
     text_types = {"char", "varchar", "tinytext", "text", "mediumtext", "longtext", "json", "enum", "set"}
+    int_cols = {(r["t"], r["c"]): r["d"].lower() in ("int", "bigint", "mediumint", "smallint", "tinyint")
+                for r in cols_rows}
+    changed_col = {r["t"]: r["c"] for r in cols_rows if r["d"].lower() in ("timestamp", "datetime")
+                   and re.fullmatch(r"(updated|modified|changed|last_?modified|last_?updated)(_?(at|on|time|date))?", r["c"], re.I)}
     tables: dict[str, dict] = {}
     keys, unique = {}, set()
     for r in cols_rows:
@@ -220,14 +245,26 @@ def seed_mysql(known: KnownValues, host: str, user: str, password: str, database
 
     q = lambda s: "`" + s.replace("`", "``") + "`"
 
-    def select(table: str, cols: list[str], limit: int):
+    def select(table: str, cols: list[str], limit: int, cursor: dict | None = None):
         key = keys.get(table, [])
         key_expr = q(key[0]) if len(key) == 1 else "NULL"
+        # delta column: an updated_at-style timestamp (catches updates) or an integer primary key
+        track = changed_col.get(table) or (key[0] if len(key) == 1 and int_cols.get((table, key[0])) else None)
+        extra, where, args = "", "", ()
+        if cursor is not None and track:
+            extra = f", {q(track)} AS __cur"
+            if table in cursor:
+                where, args = f" WHERE {q(track)} > %s", (cursor[table],)
         with conn.cursor(pymysql.cursors.SSDictCursor) as cur:
-            cur.execute(f"SELECT {key_expr} AS __key{''.join(', ' + q(c) for c in cols)} FROM {q(table)} LIMIT {int(limit)}")
+            cur.execute(f"SELECT {key_expr} AS __key{extra}{''.join(', ' + q(c) for c in cols)} FROM {q(table)}"
+                        f"{where} LIMIT {int(limit)}", args)
             for i, row in enumerate(cur):
                 if row["__key"] is None:
                     row["__key"] = i
+                if "__cur" in row:
+                    v = row.pop("__cur")
+                    if v is not None and (table not in cursor or v > cursor[table]):
+                        cursor[table] = v
                 yield row
 
     containers = []
@@ -235,4 +272,5 @@ def seed_mysql(known: KnownValues, host: str, user: str, password: str, database
         if cols:
             fk = fks.get(table, {})
             containers.append(Container(table, "__key", cols, list(select(table, sorted(set(cols) | set(fk)), 200)), fk))
-    return run(known, containers, lambda c, cols: select(c.name, sorted(set(cols) | set(c.fks)), max_rows))
+    return run(known, containers, lambda c, cols: select(c.name, sorted(set(cols) | set(c.fks)), max_rows, delta),
+               delta)

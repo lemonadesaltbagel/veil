@@ -50,6 +50,30 @@ class Matcher:
             self._stale = True
         self._masks[a] |= 1 << len(n)
 
+    def copy_with(self, needles) -> "Matcher":
+        """A new matcher with these needles added; this one is untouched (it may be
+        serving requests). Shares the automaton when no new anchor appears."""
+        m = Matcher.__new__(Matcher)
+        m.bounded, m._set, m._masks, m._stale = self.bounded, set(self._set), dict(self._masks), False
+        fresh = False
+        for n in needles:
+            if n and n not in m._set:
+                m._set.add(n)
+                a = n[:ANCHOR]
+                if a not in m._masks:
+                    m._masks[a] = 0
+                    fresh = True
+                m._masks[a] |= 1 << len(n)
+        if fresh:
+            m._auto = ahocorasick.Automaton()
+            for a in m._masks:
+                m._auto.add_word(a, a)
+            m._auto.make_automaton()
+        else:
+            self._build()
+            m._auto = self._auto
+        return m
+
     def extended(self, needles) -> "Matcher":
         """Grow while other threads may be matching: lengths and the needle set are
         updated in place (harmless to a concurrent find); a new anchor gets a new
@@ -134,6 +158,21 @@ class Prefixes:
 
     def __len__(self) -> int:
         return len(self._sorted)
+
+    def with_values(self, values) -> "Prefixes":
+        """A copy with these values added (this one is untouched)."""
+        p = Prefixes.__new__(Prefixes)
+        p.reverse = self.reverse
+        new = {v[::-1] if self.reverse else v for v in values}
+        if len(new) > 1000:
+            p._sorted = sorted(set(self._sorted) | new)
+        else:
+            p._sorted = list(self._sorted)
+            for k in new:
+                i = bisect.bisect_left(p._sorted, k)
+                if i == len(p._sorted) or p._sorted[i] != k:
+                    p._sorted.insert(i, k)
+        return p
 
     def owner(self, part: str) -> str | None:
         key = part[::-1] if self.reverse else part

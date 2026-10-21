@@ -35,7 +35,8 @@ ID_LIKE = re.compile(r"^(?:[0-9a-f]{24}|\d+|[0-9a-f-]{36})$")
 
 
 def seed_mongo(known: KnownValues, uri: str | None, database: str, max_docs: int = 500_000,
-               client=None) -> Report:
+               client=None, delta: dict | None = None) -> Report:
+    """delta: {collection: highest ObjectId _id seen}; ObjectIds grow with insert time."""
     if client is None:
         from pymongo import MongoClient
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)
@@ -67,6 +68,9 @@ def seed_mongo(known: KnownValues, uri: str | None, database: str, max_docs: int
 
     def fetch(c: Container, cols: list[str]):
         proj = {k: 1 for k in set(cols) | set(c.fks)}
-        for d in db[c.name].find({}, proj).limit(max_docs):
+        query = {"_id": {"$gt": delta[c.name]}} if delta is not None and c.name in delta else {}
+        for d in db[c.name].find(query, proj).sort("_id", 1).limit(max_docs):
+            if delta is not None and type(d.get("_id")).__name__ == "ObjectId":
+                delta[c.name] = d["_id"]
             yield _norm(d)
-    return run(known, containers, fetch)
+    return run(known, containers, fetch, delta)

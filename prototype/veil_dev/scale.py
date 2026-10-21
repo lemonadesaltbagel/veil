@@ -178,6 +178,19 @@ def main(argv=None) -> int:
     (out, _), ms2 = timed(lambda: guard.enforce(red))
     res["first_request_after_reseed_ms"] = ms1 + ms2
     res["new_customer_redacted"] = "zorvath.quillen7" not in json.dumps(out)
+    # the next change: a delta read (cursor) and grown indexes instead of a full rebuild
+    con = sqlite3.connect(db2)
+    con.executemany("INSERT INTO customers VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [(n + 100 + i, f"Yvarra{i}", f"Delmont{i}", f"yvarra.delmont{i}@later.example.net",
+                      f"ydelmont{i}", f"+44 7700 8{i:05d}", f"{i} Later Lane") for i in range(1, 11)])
+    con.commit()
+    con.close()
+    rs.prints[db2] = "changed"
+    added, res["reseed_delta_ms"] = timed(rs.check_once)
+    res["reseed_delta_added_values"] = added
+    out, _ = guard.enforce(redact_request(veil, {"model": "m", "messages": [
+        {"role": "user", "content": "and yvarra.delmont3@later.example.net?"}]}))
+    res["delta_customer_redacted"] = "yvarra.delmont3" not in json.dumps(out)
     os.remove(db2)
     res["rss_end_mb"] = rss_mb()
 

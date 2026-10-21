@@ -11,6 +11,7 @@ Allowlists drop reserved/test values; existing tokens are never re-redacted.
 
 from __future__ import annotations
 
+import bisect
 import ipaddress
 import itertools
 import json
@@ -138,6 +139,14 @@ class KnownValues:
         self._qi_groups: dict[str, int] = {}
         self._qi_all: Matcher | None = None
         self._combo_cache: dict[frozenset, int] = {}
+        # incremental indexes: a copy remembers its parent's built matchers and the needles
+        # added since, so a re-seed that adds a few values doesn't rebuild everything
+        self._base_pattern: Matcher | None = None
+        self._base_email: Matcher | None = None
+        self._new_needles: list[str] = []
+        self._new_emails: list[str] = []
+        self._new_values: list[str] = []
+        self._base_guard = None
 
     def add(self, value: str, kind: str, group: str | None = None) -> None:
         value = value.strip()
@@ -150,16 +159,22 @@ class KnownValues:
         if value in self._entries:  # first source wins: keeps a person's group when
             return                  # the value is repeated elsewhere (e.g. BillingAddress)
         self._entries[value] = (kind, group)
+        self._new_needles.append(value)
+        self._new_values.append(value)
         for alias in encoded_forms(value, kind):
-            self._aliases.setdefault(alias, value)
+            if self._aliases.setdefault(alias, value) == value:
+                self._new_needles.append(alias)
         if kind == "email":
-            self._emails_ci.setdefault(value.lower(), value)
+            if self._emails_ci.setdefault(value.lower(), value) == value:
+                self._new_emails.append(value.lower())
             # The local part identifies the person on its own: `jane.roe at mailbox dot org`,
             # substr() splits, usernames equal to it. Role mailboxes are not people.
             local = value.split("@")[0]
             if len(local) >= 5 and not local.isdigit() and local.lower() not in ROLE_LOCALS:
                 self.add(local, "username", group)
-        self._pattern = None
+        if self._pattern is not None:  # built already: grow from it next time instead of rebuilding
+            self._base_pattern, self._base_email = self._pattern, self._email_pattern
+            self._pattern = None
 
     def copy(self) -> "KnownValues":
         """Cheap copy (no re-derivation) for build-then-swap updates."""
@@ -168,6 +183,8 @@ class KnownValues:
         new._quasi = {v: list(x) for v, x in self._quasi.items()}
         new._qi_people = {v: set(p) for v, p in self._qi_people.items()}
         new._qi_groups = dict(self._qi_groups)
+        new._base_pattern, new._base_email = self._pattern, self._email_pattern
+        new._base_guard = getattr(self, "_guard_index", None)
         return new
 
     # -- quasi-identifiers ---------------------------------------------------
@@ -257,8 +274,15 @@ class KnownValues:
     def matcher(self) -> Matcher:
         """Every seeded value and encoded form (shared with the outbound guard)."""
         if self._pattern is None:
-            self._pattern = Matcher([*self._entries, *self._aliases])
-            self._email_pattern = Matcher(self._emails_ci) if self._emails_ci else None
+            if self._base_pattern is not None and len(self._new_needles) < max(1000, len(self._entries) // 10):
+                self._pattern = self._base_pattern.copy_with(self._new_needles)  # a few new values: grow a copy
+                self._email_pattern = (self._base_email.copy_with(self._new_emails) if self._base_email
+                                       else Matcher(self._emails_ci) if self._emails_ci else None)
+            else:
+                self._pattern = Matcher([*self._entries, *self._aliases])
+                self._email_pattern = Matcher(self._emails_ci) if self._emails_ci else None
+            self._base_pattern = self._base_email = None
+            self._new_needles, self._new_emails = [], []
         return self._pattern
 
     def find(self, text: str) -> list[Span]:
@@ -307,10 +331,14 @@ def detect(text: str, known: KnownValues | None, is_token, extra: list[Span] | N
                 spans.append(Span(m.start(), m.end(), kind, v))
     # Longest span wins; ties go to higher priority (known values).
     spans.sort(key=lambda s: (-(s.end - s.start), -s.priority, s.start))
-    taken: list[Span] = []
+    taken: list[Span] = []  # kept sorted by start: overlap = a neighbour check (was a scan of all)
+    starts: list[int] = []
     for s in spans:
         if is_token(s.value) or (ALLOW and s.value.lower() in ALLOW):
             continue
-        if all(s.end <= t.start or s.start >= t.end for t in taken):
-            taken.append(s)
-    return sorted(taken, key=lambda s: s.start)
+        i = bisect.bisect_left(starts, s.start)
+        if (i > 0 and taken[i - 1].end > s.start) or (i < len(taken) and taken[i].start < s.end):
+            continue
+        starts.insert(i, s.start)
+        taken.insert(i, s)
+    return taken

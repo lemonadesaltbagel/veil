@@ -386,10 +386,11 @@ def is_person(fields: list[Field]) -> bool:
 class Seeder:
     """Feeds planned fields of every container into KnownValues with groups."""
 
-    def __init__(self, known: KnownValues):
+    def __init__(self, known: KnownValues, delta: bool = False):
         self.known = known
         self.report = Report()
         self.person_group: dict[str, dict[Any, str]] = {}  # container -> key value -> group
+        self.delta = delta  # only changed rows are read: a referenced person may not be among them
 
     def order(self, containers: list[Container], plans: dict[str, list[Field]]) -> list[Container]:
         """FK targets before referrers, so persons are seeded first (first source wins)."""
@@ -424,6 +425,8 @@ class Seeder:
             group = f"{container.name}:{key}"
             for col, target in links:
                 linked = self.person_group[target].get(rec.get(col))
+                if not linked and self.delta and rec.get(col) is not None:
+                    linked = f"{target}:{rec.get(col)}"  # the group the full run gave that person
                 if linked:
                     group = linked
                     break
