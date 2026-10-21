@@ -1,6 +1,7 @@
 # veil
 
 [![PyPI](https://img.shields.io/pypi/v/veil-proxy)](https://pypi.org/project/veil-proxy/)
+[![CI](https://github.com/lemonadesaltbagel/veil/actions/workflows/ci.yml/badge.svg)](https://github.com/lemonadesaltbagel/veil/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
@@ -53,10 +54,11 @@ decodes escapes, encodings and transforms. Result: **0 real values reached the p
 session still reached the correct diagnosis.
 
 **3. Attacked like an adversary would.** An agent with a shell can transform data before veil sees
-it. We built a bypass matrix of 20 one-command transforms: byte dumps (`od`, `xxd`, `sed -n l`),
+it. We built a bypass matrix of 21 one-command transforms: byte dumps (`od`, `xxd`, `sed -n l`),
 `base64`, escape sequences, `rev`, rot13, upper-casing, one-character-per-line, spaced-out letters,
-truncation with `cut`, and SQL `hex()`, `upper()`, `replace()`, `substr()`, `unicode()`.
-**20 of 20 are contained**: blocked before they run, withheld, or fully redacted. The matrix is part
+truncation with `cut` (including byte cuts that split a character), and SQL `hex()`, `upper()`,
+`replace()`, `substr()`, `unicode()`.
+**21 of 21 are contained**: blocked before they run, withheld, or fully redacted. The matrix is part
 of the regression suite. Two lessons came out of this work:
 
 - A real model *did* bypass an early version by printing a log with `sed -n l` (octal escapes plus
@@ -85,11 +87,23 @@ the request rather than leak it.
 **7. Privacy that doesn't cost you the model.** Pseudonyms are deterministic, so the conversation
 prefix stays byte-stable and **prompt caching keeps working: 74–89% cache hits** in the real runs.
 At about 40,000 seeded values veil adds **≈ 8 ms of redaction + 11 ms of guard** per
-67,000-character Claude Code request, and hooks answer in **≈ 39 ms**.
+67,000-character Claude Code request, and hooks answer in **≈ 39 ms**. It scales: with **1.2 million
+seeded values** (150,000 people) a 234 KB request takes 37 + 68 ms, in 1.1 GB of memory
+([docs/SCALE.md](docs/SCALE.md)).
 
 **8. Your secrets stay yours, even at rest.** The local vault is AES-256-GCM encrypted, with each
 value bound to its pseudonym. Keys live in the macOS Keychain or the Linux Secret Service. Teams can
 share pseudonyms (the HMAC secret) without ever sharing the vault key.
+
+**9. It keeps up with your data.** veil remembers the sources you seeded and watches cheap change
+signals: Postgres write counters, MySQL table statistics, the Redis change counter, MongoDB op
+counters, file times. A customer added to the database while you work is pseudonymised on the next
+request. Re-seeding happens in the background; at 1.2M values the first request after it takes 0.11 s.
+
+**10. Proven on a real repository.** Setup: veil's own repository, 39,650 seeded values, Claude Code
+with a live model through veil. Task: add a feature and run the tests. The task succeeded, 0 real
+values leaked, 0 pseudonyms ended up in the code, and the only replacements were the developer's
+username and git name, so there were no false positives (`veil_dev.pilot`).
 
 ### How it compares
 
@@ -176,11 +190,22 @@ veil status ~/code/myapp      # proxy, service, keys, vault, project wiring
 cd ~/code/myapp && claude     # nothing else to configure
 ```
 
-Seed more sources at any time:
+Seed more sources at any time. They are remembered (encrypted) and re-seeded automatically when
+they change:
 
 ```sh
 veil seed postgresql://user@localhost/app mysql://root@localhost/app redis://localhost:6379/0 \
           mongodb://localhost:27017/app ./fixtures
+veil sources                  # list remembered sources (credentials masked); `veil sources remove N`
+```
+
+What *you* see is your choice; the model always sees pseudonyms:
+
+```sh
+veil display tokens           # screen sharing or a demo: answers keep pseudonyms (no restart)
+veil display real             # back to real values (the default)
+veil reveal notes.txt         # convert copied text: pseudonyms -> real values, locally
+veil share bug-report.txt     # and back: real values -> pseudonyms, before you paste it anywhere
 ```
 
 ## Teams
@@ -190,6 +215,7 @@ veil team allow support@mycompany.com             # values that are never PII
 veil team export --passphrase-env TEAM_PW         # pseudonym secret + allowlist (never the vault key)
 veil team join <bundle> --passphrase-env TEAM_PW  # identical pseudonyms on every machine
 veil team managed-settings --port 8787            # managed-settings.d/ drop-in that forces Claude Code through veil
+veil team managed-settings --display tokens       # ...and keeps pseudonyms on every screen too
 ```
 
 The managed-settings file pins the proxy address and sets `allowedProviders: ["customEndpoint"]`, so
@@ -209,11 +235,13 @@ Don't take our word for it.
 cd prototype
 uv run pytest -q                          # unit + integration tests (DB tests skip when DBs are down)
 scripts/fetch_datasets.sh                 # public sample data (Chinook, MongoDB mflix, Redis users, ai4privacy)
-scripts/dev_dbs.sh start                  # local Postgres (Docker) + MariaDB/Redis/MongoDB (Homebrew)
+scripts/dev_dbs.sh start                  # local Postgres, MariaDB, Redis, MongoDB (Homebrew; Docker fallback for Postgres)
 uv run veil audit                         # real Claude Code -> veil -> scripted model; reports what the model saw
 uv run veil audit --driver codex          # real Codex CLI (also: --provider bedrock|vertex, --driver openai|sdk)
 uv run veil audit --upstream https://api.deepseek.com/anthropic --api-key-env DEEPSEEK_API_KEY --model deepseek-flash
-uv run python -m veil_dev.redteam             # the 20-technique bypass matrix
+uv run python -m veil_dev.redteam         # the 21-technique bypass matrix
+uv run python -m veil_dev.scale           # a million seeded values: build time, memory, latency
+uv run python -m veil_dev.pilot --repo ~/code/myapp --task "..." --seed ... --upstream ... --out DIR
 uv run python scripts/eval_ai4privacy.py  # free-text leak rates: patterns / +NER / seeded
 ```
 
@@ -224,6 +252,7 @@ received, and what the model replied.
 
 | Version | Date | Where | Notes |
 |---|---|---|---|
+| main | unreleased | this repository | Display modes (`veil display`, `reveal`, `share`, team-enforced pseudonyms), automatic re-seeding, scale to 1M+ seeded values, byte-cut truncation, CI with live databases. |
 | 0.1.2 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.2/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.2/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Same code as 0.1.1, built with a pure-Python backend (`flit_core`) so the source archive builds without a Rust toolchain; that is what Homebrew needs. The dev harness moved out of the package into `veil_dev/`. Verified with `brew install --build-from-source`, `brew test` and `brew audit --strict`. |
 | 0.1.1 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.1/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.1/) | First PyPI release. The same files went to TestPyPI first as a final dry run, then to PyPI; both were verified byte-identical to the inspected build. |
 | 0.1.0 | 2026-10-20 | [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.0/) only | Packaging dry run: verified the runtime-only contents, a clean install from the index, and the console scripts. Never published to PyPI. |
@@ -257,8 +286,9 @@ veil is alpha software. We'd rather you know exactly where its edges are:
 docs/RESEARCH.md     landscape, interception points, findings from every test round
 docs/DESIGN.md       architecture, token scheme, tool policy, guard, adapters, threat model
 docs/DATABASES.md    seeding: implemented sources, classification signals, other database families
+docs/SCALE.md        a million seeded values: before/after measurements
 prototype/veil/      the package (proxy, engine, guard, seeders, API adapters, CLI)
-prototype/veil_dev/  development harness: audits, fake models, bypass matrix (not packaged)
+prototype/veil_dev/  development harness: audits, fake models, bypass matrix, pilot, scale (not packaged)
 prototype/tests/     test suite
 prototype/scripts/   dev databases, dataset fetch, evaluation, Homebrew formula generator
 ```

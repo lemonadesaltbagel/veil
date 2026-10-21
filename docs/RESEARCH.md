@@ -244,20 +244,55 @@ Database seeding details: see `docs/DATABASES.md`.
   a regression test; the stray item (dummy test value) was deleted.
 - Hooks via the proxy are 7× faster (39 ms vs 278 ms). Linux path verified in a container.
 
-## 12. Known limitations (honest list)
+## 12. Display, re-seeding, pilot, CI, scale (2026-10-21)
+
+- **Display is a mode, not a yes/no.** Real values by default, `veil display tokens` at runtime, and
+  enforceable per team through a managed header that can only tighten. See DESIGN "Display modes".
+- **Re-seeding.** A Postgres customer inserted while the proxy ran was pseudonymised on the next
+  request after the fingerprint changed (end-to-end through the real proxy). Live fingerprint tests
+  run for Postgres, MariaDB, Redis and MongoDB.
+- **Pilot on a real repository** (`veil_dev.pilot`). Setup: veil's own repo, 39,650 seeded values,
+  Claude Code with DeepSeek through veil. The task was to add a `--version` flag and run a test
+  file. Results:
+  - The task succeeded in 7 turns, with 72% cache reads and about $0.02 cost.
+  - 0 seeded values leaked, and 0 pseudonyms were written into the code.
+  - The only replacements were the developer's OS username (in paths) and git author name, so
+    there were no false positives.
+
+  Before that run, the pilot found a guard false positive. The transformed-value check stripped all
+  whitespace, so two ordinary adjacent words could glue into a seeded surname (`At` + `cheson`).
+  Fixed by checking two views:
+  - a word view, which keeps spaces;
+  - a character view, which squashes only s p a c e d - o u t runs.
+- **CI on Linux found two portability bugs.** One was macOS-only `plutil` in a test. The other was
+  GNU `cut -b`, which cuts UTF-8 mid-character. Decoding leaves U+FFFD there, which the truncation
+  check now treats as a cut boundary (new bypass technique, 21/21 contained).
+  A flaky red-team result was a harness false positive: a phone pseudonym is `555-01xx`, and a
+  fictional real phone in Chinook can share those digits. The partial-leak scan now ignores text
+  inside tokens; 0 failures in 150 runs.
+- **Scale** (`docs/SCALE.md`), at 1.2M seeded values:
+  - guard index build: 51 s → 3.8 s;
+  - memory: 4.9 GB → 1.1 GB;
+  - first request after a re-seed: 94 s → 0.11 s;
+  - guard p50 / max: 86 / 815 ms → 68 / 69 ms.
+
+## 13. Known limitations (honest list)
 
 - `write_stdin` (Codex interactive sessions) never receives real values, so interactive tools (e.g. a
   `sqlite3` REPL) see pseudonyms; non-interactive commands are unaffected.
 - Local machine is trusted: real values live in the vault and Claude Code's local transcripts
   (rehydrated text), and OTel/analytics see original tool output (disable non‑essential traffic).
-- Encoded forms: URL, JSON `\u`, NFD, base64 (guard), sed-`l`/octal/`\x` (guard withholds) are handled;
-  arbitrary agent-chosen transforms (rot13, reversing, `cut -c`, custom scripts) cannot all be anticipated.
+- Encoded forms: URL, JSON `\u`, NFD, base64 (guard decodes runs at every alignment), sed-`l`/octal/`\x`,
+  case, spacing, reversal, rot13, hex, char codes and truncation (guard withholds or marks partial) are
+  handled; arbitrary agent-written transforms (custom scripts) cannot all be anticipated.
 - Short/common values (`bob`, `admin`, first names like `May`) need min‑length + stoplists → recall trade‑off.
 - Images (screenshots) are passed through unscanned.
-- Fragments of pseudonyms (LIKE/grep on part of a token) silently match nothing in real data.
+- Fragments of pseudonyms (LIKE/grep on part of a token) can't match real data. A Bash command
+  containing one is replaced with a notice naming the whole tokens; a Grep pattern is expanded to that
+  person's real values. A fragment assembled inside a script is not caught.
 - Shell escaping covers sh quoting + SQL literals in double-quoted strings; other interpreters
   embedded in commands (`python -c "…"`, `jq '…'`, heredocs) are escaped only at the shell level.
-- Transform coverage is a matrix of 20 known techniques, not a proof: an agent can always invent a new
+- Transform coverage is a matrix of 21 known techniques, not a proof: an agent can always invent a new
   encoding (custom scripts). Seeded values < 8 chars are only checked verbatim/encoded.
 - Free‑text PII not in the seed (e.g. a support ticket mentioning a third party) needs the NER layer.
 - Quasi‑identifiers (tenant names, rare amounts, timestamps) can still enable re‑identification.

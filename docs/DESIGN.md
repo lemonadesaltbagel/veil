@@ -55,7 +55,8 @@ The LLM sees a consistent fake world; the developer's machine keeps the real one
 1. **Known values** — exact dictionary seeded from data sources (column classifier: `email`,
    `username|login|handle`, `first_name`, `name` only on person‑like tables, `phone`, `ip`…).
    Identifier boundaries so `alice_w` ≠ `malice_wrapper`. Min length + stopword list for short values.
-   Prototype: one regex alternation; production: Aho–Corasick (pyahocorasick / Rust `aho-corasick`).
+   Aho–Corasick over each needle's first 6 characters, confirmed by set lookups of the candidate
+   lengths: 1.2M seeded values cost 1.1 GB and ~37 ms per 234 KB request (`docs/SCALE.md`).
 2. **Patterns** — email, phone (separator required), public IPv4 only, cards (Luhn), secrets
    (AWS, `sk-`, `ghp_`, Slack, JWT). Production: adopt a checksum‑validated, false‑positive‑tested set.
 3. **NER (optional, `veil[ner]`, `--ner`)** — GLiNER-PII edge (46 MB quantised ONNX, ~15 ms/row) on free
@@ -197,6 +198,41 @@ a client SigV4 signature covers the body veil must change. Bedrock: `AWS_BEARER_
   v2.1.285+), optional veil hooks via the stable `veil-hook` command, optional `allowManagedHooksOnly`.
   Installed by an admin into `/Library/Application Support/ClaudeCode/` or `/etc/claude-code/`.
 
+## Display modes
+
+What the developer sees is separate from what the model sees (always pseudonyms).
+
+- `real` (default): responses and tool inputs are rehydrated, so the terminal shows real values.
+- `tokens`: responses keep pseudonyms (screen sharing, demos, pairing). Tool inputs are still
+  rehydrated, so commands keep working.
+
+Resolution per request: an `x-veil-display: tokens` header (set through managed
+`ANTHROPIC_CUSTOM_HEADERS` by `veil team managed-settings --display tokens`) or a `--show-tokens`
+proxy forces tokens; otherwise `VEIL_DISPLAY`, then `display` in `~/.veil/config.json` (switched at
+runtime by `veil display real|tokens`, no restart). A header can only make the display *stricter*,
+and it is stripped before forwarding. `veil reveal FILE` and `veil share FILE` convert copied text
+locally in either direction.
+
+## Re-seeding
+
+`veil seed` and `veil init` remember their sources (encrypted, `sources.enc`: URLs can carry
+passwords; `veil sources` lists or removes them). While the proxy runs, a thread checks a cheap
+fingerprint of each source every 30 s. The fingerprints are:
+
+- Postgres: `pg_stat_user_tables` write counters;
+- MySQL: `information_schema.TABLES` (stats cache disabled);
+- Redis: `dbsize` + changes since save;
+- MongoDB: `serverStatus` op counters (document counts as a fallback);
+- files: mtime/size, including SQLite `-wal`.
+
+On a change, the thread re-seeds the source into a copy of the known values, builds the matcher and
+guard indexes, and swaps the copy in atomically. A request never waits for a rebuild; that took 94 s
+at 1.2M values before the indexes were moved to the thread. Unreachable sources keep their last
+snapshot. The interval stretches to 10× the last re-seed's duration.
+
+A value redacted *before* it was seeded keeps its first token: stability, which keeps prompt caching
+and the conversation consistent, wins over regrouping it with its person.
+
 ## Fast hooks
 
 `veil-hook pre|post` (stdlib only) forwards the hook event to the running proxy's
@@ -253,21 +289,21 @@ system prompt, and fails open on schema mismatch → backup only.
     pg_anonymizer dictionary, FK/value grouping, fragment handling, optional NER, escape/byte-dump defence. ✅
     See `docs/DATABASES.md`.
 2. Seeders still to do: SQL Server (native classifications), schema-from-code (ORM types), Elasticsearch,
-   DynamoDB key segments, warehouses; `git log` authors; continuous re-seeding when the DB changes.
-3. Leak‑test harness: canary values planted in DB/logs; run real agent sessions; assert no canary in
-   upstream payloads (proxy logs payload hashes + "what the model saw" diff viewer).
+   DynamoDB key segments, warehouses; `git log` authors. ✅ continuous re-seeding (2026-10-21).
+3. ✅ Leak harnesses: `veil audit` (canary scenario, real agents, offline), bypass matrix
+   (`veil_dev.redteam`), pilot on a real repository (`veil_dev.pilot`), CI with live databases.
 4. ✅ done (see 1d). Still open: per-project vault namespaces, key rotation, team secret distribution.
 5. Optional NER layer (Privacy Filter / GLiNER) for free text; quasi‑identifier warnings.
 6. ✅ OpenAI Chat Completions + Responses adapters (Aider/Continue/SDK; Codex). Still open: Bedrock/Vertex
    formats; MCP DB server with masking.
 7. ✅ `veil init` / `status` / `service`; ✅ team mode, managed-settings drop-in, Linux (systemd + Secret
    Service), Bedrock/Vertex, fast hooks, packaging (2026-10-20).
-8. Open: publish a release (PyPI + Homebrew tap), Windows (Credential Manager, scheduled task),
-   Microsoft Foundry / Claude Platform on AWS formats, real-cloud runs (needs AWS/GCP accounts).
+8. ✅ Released: `veil-proxy` 0.1.1 / 0.1.2 on PyPI, Homebrew tap. ✅ Display modes, re-seeding, pilot,
+   CI, scale to 1M values (2026-10-21). Open: Windows (Credential Manager, scheduled task), Microsoft
+   Foundry / Claude Platform on AWS formats, real-cloud runs (needs AWS/GCP accounts).
 
 ## Open questions
 
 - Should file writes ever get *new* real values (e.g. user explicitly asks to add a real admin email)?
   Proposed: explicit per‑session override, logged.
-- Display of real values in the terminal: default on (UX) vs off (shoulder‑surfing, screen sharing).
 - Short/common usernames (`bob`, `jordan`): recall vs breaking code identifiers — needs a corpus to tune.

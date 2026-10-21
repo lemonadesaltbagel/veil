@@ -107,11 +107,8 @@ PATTERNS: list[tuple[str, re.Pattern, object]] = [
 
 
 class KnownValues:
-    """Exact-match dictionary of real values (prototype: one big regex).
-
-    Production should use Aho-Corasick; Python's re alternation is fine for a
-    few tens of thousands of values.
-    """
+    """Exact-match dictionary of real values and their encoded forms (anchored
+    Aho-Corasick, see match.py; shared with the outbound guard)."""
 
     def __init__(self, min_len: int = 4):
         self.min_len = min_len
