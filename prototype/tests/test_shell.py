@@ -59,3 +59,18 @@ def test_sql_literal_inside_double_quotes(veil, tmp_path, value):
     assert r.stdout.strip() == "1", (cmd, r.stdout, r.stderr)
     assert not list(tmp_path.glob("PWNED*"))
     assert con.execute("select count(*) from users").fetchone()[0] == 1  # table not dropped
+
+
+def test_token_after_a_newline_is_whole_not_a_fragment(veil, tmp_path):
+    tok = veil.redact("O'Brien")
+    cmd = rehydrate_tool_input(veil, Policy(), "Bash", {"command": f"cat <<'EOF'\n{tok}\nEOF"})["command"]
+    assert "veil:" not in cmd and run(cmd, tmp_path).stdout == "O'Brien\n"
+
+
+def test_edit_restores_existing_value_at_line_start(veil, tmp_path):
+    f = tmp_path / "people.txt"
+    f.write_text("O'Brien\n")
+    tok = veil.redact("O'Brien")
+    out = rehydrate_tool_input(veil, Policy(), "Edit", {"file_path": str(f), "old_string": f"{tok}\n",
+                                                       "new_string": f"# owner\n{tok}\n"})
+    assert out["new_string"] == "# owner\nO'Brien\n"

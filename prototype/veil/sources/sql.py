@@ -13,7 +13,7 @@ import uuid
 from typing import Any, Callable, Iterable
 
 from ..detect import KnownValues
-from .core import Container, Report, Seeder, classify_label, plan
+from .core import Container, Report, Seeder, classify_label, classify_quasi, plan
 
 SAMPLE = 200
 
@@ -62,7 +62,8 @@ def seed_sqlite(known: KnownValues, path: str, max_rows: int = 500_000) -> Repor
         keys[table] = pks[0] if len(pks) == 1 else "rowid"
         types = {r["name"]: (r["type"] or "").upper() for r in info}
         text_cols = {c: {"json": "JSON" in t} for c, t in types.items()
-                     if not t or any(x in t for x in ("CHAR", "TEXT", "CLOB", "JSON"))}
+                     if not t or any(x in t for x in ("CHAR", "TEXT", "CLOB", "JSON"))
+                     or ("DATE" in t or "TIME" in t) and classify_quasi(c) == "dob"}
         unique = set()
         for ix in db.execute(f"PRAGMA index_list({q(table)})").fetchall():
             cols = db.execute(f"PRAGMA index_info({q(ix['name'])})").fetchall()
@@ -129,7 +130,8 @@ def seed_postgres(known: KnownValues, dsn: str, max_rows: int = 500_000) -> Repo
     tables: dict[tuple[str, str], dict[str, dict]] = {}
     for r in conn.execute(PG_COLUMNS).fetchall():
         schema, table, col, typ, cat, elem_cat, comment = r.values()
-        textish = cat in ("S", "I") or typ in ("json", "jsonb") or (cat == "A" and elem_cat in ("S", "I"))
+        textish = cat in ("S", "I") or typ in ("json", "jsonb") or (cat == "A" and elem_cat in ("S", "I")) \
+            or cat == "D" and classify_quasi(col) == "dob"  # dates only for a birth date
         tables.setdefault((schema, table), {})
         if textish:
             tables[(schema, table)][col] = {"json": typ in ("json", "jsonb"), "comment": comment}
@@ -202,7 +204,8 @@ def seed_mysql(known: KnownValues, host: str, user: str, password: str, database
             keys.setdefault(r["t"], []).append(r["c"])
         if r["k"] in ("PRI", "UNI"):
             unique.add((r["t"], r["c"]))
-        if r["d"].lower() in text_types:
+        if r["d"].lower() in text_types or \
+                r["d"].lower() in ("date", "datetime", "timestamp") and classify_quasi(r["c"]) == "dob":
             tables[r["t"]][r["c"]] = {"json": r["d"].lower() == "json", "comment": r["m"] or None}
     per_constraint: dict[str, list] = {}
     for r in fk_rows:

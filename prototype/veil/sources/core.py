@@ -31,6 +31,9 @@ from ..detect import KnownValues
 
 COLUMN_KINDS = [
     ("secret", re.compile(r"password|passwd|_hash$|^hash$|token|api_?key|secret|^jwt$", re.I)),
+    # government / bank identifiers: direct identifiers, always pseudonymised
+    ("id_number", re.compile(r"ssn|social_?security|national_?id|passport|tax_?(id|number|no)$|^tin$|^nino$|"
+                             r"driver_?s?_?licen[cs]e|^iban$|^bsn$|^cpf$|aadhaar|^nhs_?(no|number)$|^sin$", re.I)),
     ("email", re.compile(r"e_?mail", re.I)),
     ("username", re.compile(r"^(user_?name|login|handle|screen_?name|nick(name)?|alias(es)?)$", re.I)),
     ("first_name", re.compile(r"^(first|given)_?name$", re.I)),
@@ -57,8 +60,8 @@ GENERIC_LEAVES = {"number", "value", "raw", "text", "addr"}
 # opaque ids (`id`, `uid`, `client_id`) are deliberately NOT PII kinds for veil
 # (pseudonymising them breaks code); dates are skipped for the same reason.
 ANON_CATEGORY = {"email": "email", "firstname": "first_name", "phone_number": "phone", "fax_number": "phone",
-                 "street_address": "address", "ip_address": "ipv4", "creditcard": "secret", "iban": "secret",
-                 "social_security_id": "secret", "password": "secret"}
+                 "street_address": "address", "ip_address": "ipv4", "creditcard": "secret", "iban": "id_number",
+                 "social_security_id": "id_number", "password": "secret"}
 ANON_HANDLES = {"login", "username", "nom_utilisateur", "twitter", "twitter_id", "skype", "skype_id",
                 "linkedin", "linkedin_id", "facebook", "facebook_id", "google", "ldap_id"}
 ANON_NAMES = {"name": "name", "nom": "last_name", "last_name": "last_name"}
@@ -182,6 +185,25 @@ def extract(record: dict, path: str) -> list[Any]:
     return [n for n in nodes if n is not None and not isinstance(n, (dict, list))]
 
 
+# Quasi-identifiers: harmless alone, identifying in combination or when rare (a ZIP code,
+# a birth date and a gender single out most people). Only planned on person records.
+QUASI_COLUMNS = [
+    ("dob", re.compile(r"(^|_)(dob|birth_?date|date_?of_?birth|birthday|born_?on)$", re.I)),
+    ("postal_code", re.compile(r"(^|_)(zip(_?code)?|postal_?code|post_?code|plz)$", re.I)),
+    ("city", re.compile(r"(^|_)(city|town|locality)$", re.I)),
+    ("company", re.compile(r"(^|_)(company(_?name)?|employer|organi[sz]ation(_?name)?|org_?name|business_?name)$", re.I)),
+    ("job_title", re.compile(r"(^|_)(job_?title|title|occupation|position|designation)$", re.I)),
+]
+
+
+def classify_quasi(path: str) -> str | None:
+    leaf = path.split(".")[-1].removesuffix("[]")
+    for kind, rx in QUASI_COLUMNS:
+        if rx.search(leaf):
+            return kind
+    return None
+
+
 def _singulars(word: str) -> list[str]:
     out = [word]
     if word.endswith("es") and len(word) > 4:
@@ -267,6 +289,7 @@ def plan(container: Container) -> list[Field]:
     """Decide which field paths hold PII, from comments, names and sampled values."""
     fields: list[Field] = []
     bare_names: list[str] = []
+    unclassified: list[str] = []
     for col, meta in container.columns.items():
         if col == container.key or col in container.fks:
             continue
@@ -297,10 +320,18 @@ def plan(container: Container) -> list[Field]:
                 fields.append(Field(container.name, p, kind, "comment+values" if tagged else "values"))
             elif p.split(".")[-1].removesuffix("[]").lower() == "name":
                 bare_names.append(p)
+            else:
+                unclassified.append(p)
     # A bare `name` next to an email/username in the same record is a person's name,
     # whatever the container is called (export.json, items, ...).
     if any(f.kind in LINK_KINDS for f in fields):
         fields += [Field(container.name, p, "name", "name+context") for p in bare_names]
+    if is_person(fields):
+        taken = {f.path for f in fields}
+        for p in unclassified:
+            kind = classify_quasi(p)
+            if kind and p not in taken:
+                fields.append(Field(container.name, p, "qi:" + kind, "name"))
     return fields
 
 
@@ -365,6 +396,11 @@ class Seeder:
                 groups[key] = group
             parts: dict[str, str] = {}
             for f in fields:
+                if f.kind.startswith("qi:"):
+                    for v in extract(rec, f.path):
+                        if v is not None and not isinstance(v, (dict, list, bool)):
+                            self.known.add_quasi(v, f.kind[3:], group)
+                    continue
                 for v in extract(rec, f.path):
                     v = str(v)
                     n = len(self.known)

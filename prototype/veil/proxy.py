@@ -24,7 +24,7 @@ from .anthropic import Policy, StreamRewriter, redact_request, rehydrate_respons
 from .engine import Veil
 import dataclasses
 
-from . import cloud, display
+from . import cloud, display, quasi
 from .state import home
 from .guard import Guard
 from .openai import ChatStreamRewriter, is_chat_path, redact_chat_request, rehydrate_chat_response
@@ -32,6 +32,17 @@ from .responses import (ResponsesStreamRewriter, is_responses_path, redact_respo
                         rehydrate_responses_body)
 
 HOP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding", "keep-alive"}
+
+
+def _strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for v in node.values():
+            yield from _strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _strings(v)
 
 
 def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client, log=sys.stderr,
@@ -42,6 +53,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
     reply before rehydration), status, findings and timings. For audits and tests."""
     guard = Guard(veil)
     guard_lock = threading.Lock()
+    quasi_monitor = quasi.Monitor()
     try:  # create the hook secret up front so the first hook call can use the fast path
         from .hooks import hook_secret
         from .state import home
@@ -106,6 +118,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                                    "display": display.resolve(self.headers, home(), not policy.display_real),
                                    "sources": len(getattr(getattr(veil, "reseeder", None), "sources", [])),
                                    "reseed_passes": getattr(getattr(veil, "reseeder", None), "runs", 0),
+                                   "quasi": quasi.mode(home()), "quasi_reported": len(quasi_monitor.seen),
                                    "tokens": len(veil.vault.tokens()), "ner": veil.ner is not None}).encode()
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
@@ -118,6 +131,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
         def do_POST(self):
             raw = self.rfile.read(int(self.headers.get("content-length") or 0))
             if self.path.split("?")[0] in ("/veil/hook/pre", "/veil/hook/post"):
+                veil.quasi_mode = quasi.mode(home())
                 return self._hook(raw)
             self._forward(raw)
 
@@ -138,6 +152,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
             mode = display.resolve(self.headers, home(), forced_tokens=not policy.display_real)
             self.pol = dataclasses.replace(policy, display_real=mode == "real")
             exch["display"] = mode
+            veil.quasi_mode = quasi.mode(home())
             path = self.path
             api = "anthropic" if path.split("?")[0].startswith("/v1/messages") else \
                 ("chat" if is_chat_path(path) else ("responses" if is_responses_path(path) else cloud.route(path)))
@@ -171,6 +186,11 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                         exch["status"] = "blocked by veil"
                         return self._fail(400, f"veil blocked request: {len(blocked)} real value(s) in "
                                                f"unrepairable field(s): {sorted({f.path for f in blocked})}")
+                    if veil.quasi_mode == "warn":
+                        warning = quasi_monitor.check(veil.known, _strings(body.get("messages") or body.get("input")))
+                        if warning:
+                            exch["quasi"] = warning
+                            print(f"[veil] {warning}", file=log)
                     stream = bool(body.get("stream"))
                     body_bytes = json.dumps(body, ensure_ascii=False).encode()
                     exch["sent"] = body

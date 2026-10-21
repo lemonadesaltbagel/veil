@@ -174,6 +174,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("seed-env")
     sub.add_parser("redact"); sub.add_parser("rehydrate")
     s = sub.add_parser("display"); s.add_argument("mode", nargs="?", choices=["real", "tokens"])
+    s = sub.add_parser("quasi", help="quasi-identifiers (city, zip, birth date, company, job title): warn|redact|off")
+    s.add_argument("mode", nargs="?", choices=["warn", "redact", "off"])
     for name in ("reveal", "share"):
         s = sub.add_parser(name); s.add_argument("file", nargs="?", default="-")
     s = sub.add_parser("proxy"); s.add_argument("--port", type=int, default=8787)
@@ -214,6 +216,18 @@ def main(argv: list[str] | None = None) -> int:
         mode = display.configured_mode(state.home())
         print(f"display: {mode}" + ("  (VEIL_DISPLAY overrides config)" if __import__("os").environ.get("VEIL_DISPLAY") else "")
               + ("\nnote: a managed `x-veil-display: tokens` header still forces pseudonyms" if mode == "real" else ""))
+        return 0
+    if args.cmd == "quasi":
+        from . import quasi
+        if args.mode:
+            cfg = state.config(); cfg["quasi"] = args.mode; state.save_config(cfg)
+        known = state.load().known
+        rare = known.rare_quasi()
+        by_kind: dict[str, int] = {}
+        for kind, _, _ in rare.values():
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+        print(f"quasi-identifiers: {quasi.mode(state.home())}  ({len(rare)} rare of {len(known._quasi)} seeded"
+              + (": " + ", ".join(f"{k} {n}" for k, n in sorted(by_kind.items())) if by_kind else "") + ")")
         return 0
     if args.cmd == "team":
         return _team(args)

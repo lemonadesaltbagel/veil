@@ -20,25 +20,31 @@ import os
 
 MODES = ("real", "tokens")
 HEADER = "x-veil-display"
-_cache: dict = {"path": None, "mtime": None, "mode": "real"}
+_cache: dict = {"path": None, "mtime": None, "cfg": {}}
 
 
-def configured_mode(home: str) -> str:
-    env = os.environ.get("VEIL_DISPLAY", "").strip().lower()
-    if env in MODES:
-        return env
+def setting(home: str, key: str, env: str, modes: tuple, default: str) -> str:
+    """A mode from $env, else `key` in $VEIL_HOME/config.json (re-read when it changes)."""
+    v = os.environ.get(env, "").strip().lower()
+    if v in modes:
+        return v
     path = os.path.join(home, "config.json")
     try:
         mtime = os.stat(path).st_mtime_ns
     except OSError:
-        return "real"
+        return default
     if _cache["path"] != path or _cache["mtime"] != mtime:
         try:
-            mode = json.load(open(path)).get("display", "real")
+            cfg = json.load(open(path))
         except (OSError, ValueError):
-            mode = "real"
-        _cache.update(path=path, mtime=mtime, mode=mode if mode in MODES else "real")
-    return _cache["mode"]
+            cfg = {}
+        _cache.update(path=path, mtime=mtime, cfg=cfg if isinstance(cfg, dict) else {})
+    v = _cache["cfg"].get(key, default)
+    return v if v in modes else default
+
+
+def configured_mode(home: str) -> str:
+    return setting(home, "display", "VEIL_DISPLAY", MODES, "real")
 
 
 def resolve(headers, home: str, forced_tokens: bool = False) -> str:

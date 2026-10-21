@@ -82,10 +82,29 @@ def _fragment_notice(veil: Veil, codes: list[str]) -> str:
     return "echo " + "'" + msg.replace("'", "") + "'"
 
 
+def _texts(obj) -> str:
+    """Every string in a tool input, NUL-separated. (Scanning json.dumps() output glued
+    the `n` of an escaped newline onto a token after it, so the token went unseen.)"""
+    out: list[str] = []
+
+    def walk(o):
+        if isinstance(o, str):
+            out.append(o)
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                walk(k)
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(obj)
+    return "\0".join(out)
+
+
 def rehydrate_tool_input(veil: Veil, policy: Policy, tool: str, tool_input: dict) -> dict:
     mode = policy.mode(tool, tool_input)
     if mode == "full":
-        frags = veil.fragments(json.dumps(tool_input, ensure_ascii=False))
+        frags = veil.fragments(_texts(tool_input))
         if frags and tool == "Grep" and isinstance(tool_input.get("pattern"), str):
             # "lines about person mz5z": expand the fragment to that person's real values
             pat, codes = tool_input["pattern"], veil.codes()
@@ -117,7 +136,7 @@ def rehydrate_tool_input(veil: Veil, policy: Policy, tool: str, tool_input: dict
                 existing = f.read()
         except OSError:
             existing = ""
-        allowed = {t for t in veil.tokens_in(json.dumps(tool_input, ensure_ascii=False))
+        allowed = {t for t in veil.tokens_in(_texts(tool_input))
                    if (veil.vault.value_for(t) or "\0") in existing}
         for k in CONTENT_FIELDS & out.keys():
             out[k] = veil.rehydrate_json(out[k], only=allowed)

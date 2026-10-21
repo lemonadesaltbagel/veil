@@ -61,9 +61,16 @@ def load() -> Veil:
         rows = json.load(open(legacy))
     else:
         rows = []
+    quasi = []
+    if isinstance(rows, dict):  # v2: {"rows": [...], "quasi": [...]}
+        rows, quasi = rows.get("rows", []), rows.get("quasi", [])
     for value, kind, group in rows:
         known.add(value, kind, group)
+    for value, kind, count, group in quasi:
+        known._quasi[value] = [kind, count, group]
     veil = Veil(Vault(os.path.join(h, "vault.db"), token_secret, cipher), known)
+    from .quasi import mode as quasi_mode
+    veil.quasi_mode = quasi_mode(h)  # in-process hooks follow `veil quasi` too
     if os.path.exists(legacy):  # migrate v1 plaintext seed file
         save_known(known, cipher)
         os.remove(legacy)
@@ -75,7 +82,8 @@ def save_known(known: KnownValues, cipher=None) -> None:
     h = home()
     cipher = cipher or Cipher(_key_material(h)[0])
     rows = [[v, k, g] for v, (k, g) in known._entries.items()]
-    _private_write(os.path.join(h, "known.enc"), cipher.seal(json.dumps(rows), "known"))
+    quasi = [[v, k, n, g] for v, (k, n, g) in known._quasi.items()]
+    _private_write(os.path.join(h, "known.enc"), cipher.seal(json.dumps({"rows": rows, "quasi": quasi}), "known"))
 
 
 # -- remembered seed sources (encrypted: database URLs can carry passwords) --------------

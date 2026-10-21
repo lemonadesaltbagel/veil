@@ -30,11 +30,11 @@ from .match import Matcher, Prefixes
 UNREPAIRABLE = ("thinking", "signature", "redacted_thinking")
 WITHHELD = ("[veil: output withheld - it contained personal data in an escaped/encoded form "
             "(e.g. sed -n l, octal or \\x escapes). Read the data normally; values are pseudonymised.]")
-PATTERN_KINDS = {"email", "phone", "ipv4", "card", "secret"}
+PATTERN_KINDS = {"email", "phone", "ipv4", "card", "secret", "id_number"}
 # Protocol structure, never content: a seeded last name "Read" must not rename the Read tool.
 STRUCTURAL = {"type", "id", "tool_use_id", "role", "cache_control", "media_type", "signature"}
 TOOL_BLOCKS = {"tool_use", "server_tool_use", "mcp_tool_use", "tool_reference"}
-TRUNCATABLE = {"name", "first_name", "last_name", "email", "username", "address", "secret"}
+TRUNCATABLE = {"name", "first_name", "last_name", "email", "username", "address", "secret", "id_number"}
 PARTIAL = "[veil:partial]"
 # Deliberately independent of the redactor's CONFIG_FIELDS: the guard must not
 # share the redactor's assumptions. Only scalar settings are skipped (a model id

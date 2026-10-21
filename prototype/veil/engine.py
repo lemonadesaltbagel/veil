@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import re
 import threading
@@ -68,6 +69,7 @@ class Veil:
         self.vault = vault
         self.known = known or KnownValues()
         self.ner = ner  # optional free-text detector (veil.ner.GlinerDetector)
+        self.quasi_mode = "warn"  # "redact": rare quasi-identifiers are pseudonymised too (veil/quasi.py)
         self._tokens = TokenPattern()
         self._tokens_lock = threading.Lock()
         self._codes: dict[str, list[str]] = {}
@@ -85,6 +87,9 @@ class Veil:
             # never let NER re-redact pieces of existing tokens ("Ayp8" in "First_Ayp8 Last_Ayp8")
             extra = [s for s in self.ner.find(text)
                      if not any(a < s.end and s.start < b for a, b in tokens) and s.value.lower() not in codes]
+        if self.quasi_mode == "redact":
+            # no person group: a city shared by three people must not link them to one code
+            extra = (extra or []) + [dataclasses.replace(s, group=None) for s in self.known.find_quasi(text)]
         spans = detect(text, self.known, self.vault.is_token, extra)
         if not spans:
             return text

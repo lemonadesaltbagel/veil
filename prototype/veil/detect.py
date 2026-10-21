@@ -88,6 +88,14 @@ def _public_ip(s: str) -> bool:
     return ip.is_global
 
 
+def _iban(v: str) -> bool:
+    v = v.replace(" ", "")
+    if not 15 <= len(v) <= 34:
+        return False
+    digits = "".join(str(int(ch, 36)) for ch in v[4:] + v[:4])
+    return int(digits) % 97 == 1
+
+
 PATTERNS: list[tuple[str, re.Pattern, object]] = [
     # \w is Unicode-aware: internationalised addresses (RFC 6531) like luís.gonçalves@x.net
     ("email", re.compile(r"(?<![\w.+-])[\w.%+-]+@[\w.-]+\.[^\W\d_]{2,}(?![\w-])"),
@@ -96,6 +104,9 @@ PATTERNS: list[tuple[str, re.Pattern, object]] = [
      None),
     # a trailing "." ends a sentence unless a digit follows (1.2.3.4.5 is not an IP)
     ("ipv4", re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\w|\.\d)"), _public_ip),
+    # US SSN (never-issued ranges excluded); IBAN with its mod-97 checksum
+    ("id_number", re.compile(r"(?<![\w-])(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(?![\w-])"), None),
+    ("id_number", re.compile(r"(?<![\w])[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?(?!\w)"), _iban),
     ("card", re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"),
      lambda v: _luhn(re.sub(r"\D", "", v))),
     ("secret", re.compile(
@@ -117,6 +128,10 @@ class KnownValues:
         self._emails_ci: dict[str, str] = {}  # casefolded email -> canonical (emails are case-insensitive)
         self._pattern: Matcher | None = None
         self._email_pattern: Matcher | None = None
+        # quasi-identifiers (city, postal code, birth date, company, job title): value ->
+        # [kind, number of records with it, group]. Only rare ones identify anyone.
+        self._quasi: dict[str, list] = {}
+        self._quasi_pattern: Matcher | None = None
 
     def add(self, value: str, kind: str, group: str | None = None) -> None:
         value = value.strip()
@@ -144,7 +159,36 @@ class KnownValues:
         """Cheap copy (no re-derivation) for build-then-swap updates."""
         new = KnownValues(self.min_len)
         new._entries, new._aliases, new._emails_ci = dict(self._entries), dict(self._aliases), dict(self._emails_ci)
+        new._quasi = {v: list(x) for v, x in self._quasi.items()}
         return new
+
+    # -- quasi-identifiers ---------------------------------------------------
+    def add_quasi(self, value, kind: str, group: str | None = None) -> None:
+        value = str(value).strip()
+        if kind == "dob":
+            value = value.removesuffix(" 00:00:00").removesuffix("T00:00:00")
+        if len(value) < 4 or value.lower() in STOPWORDS or value.lower() in ALLOW or value in self._entries:
+            return
+        if kind in ("city", "company", "job_title") and value.lower() in COMMON_WORDS:
+            return  # "Nice", "Mobile": a word, not a rare place
+        entry = self._quasi.get(value)
+        if entry is None:
+            self._quasi[value] = [kind, 1, group]
+        elif entry[2] != group:
+            entry[1] += 1
+        self._quasi_pattern = None
+
+    def rare_quasi(self) -> dict[str, list]:
+        """Quasi-identifiers shared by fewer than QUASI_K records (k-anonymity)."""
+        return {v: e for v, e in self._quasi.items() if e[1] < QUASI_K}
+
+    def find_quasi(self, text: str) -> list[Span]:
+        if not self._quasi:
+            return []
+        if self._quasi_pattern is None:
+            self._quasi_pattern = Matcher(self.rare_quasi())
+        return [Span(a, b, self._quasi[n][0], n, self._quasi[n][2], priority=5)
+                for a, b, n in self._quasi_pattern.find(text)]
 
     def group_of(self, s: str) -> str | None:
         value = self.canonical(s.strip())
@@ -181,6 +225,10 @@ class KnownValues:
             kind, group = self._entries[value]
             out.append(Span(start, end, kind, value, group, priority=10))
         return out
+
+
+QUASI_K = 5  # a value shared by fewer records than this points at a few people
+QUASI_KINDS = ("dob", "postal_code", "city", "company", "job_title")
 
 
 def encoded_forms(value: str, kind: str) -> set[str]:
