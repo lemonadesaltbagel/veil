@@ -157,6 +157,13 @@ class SQLSource:
                                         connect_timeout=10)
             with self.conn.cursor() as c:
                 c.execute("SET SESSION TRANSACTION READ ONLY")
+                for limit in ("SET SESSION MAX_EXECUTION_TIME = 30000",  # MySQL (ms)
+                              "SET SESSION max_statement_time = 30"):     # MariaDB (s)
+                    try:
+                        c.execute(limit)
+                        break
+                    except Exception:
+                        continue
             self.kind, self.paramstyle = "mysql", "format"
         elif u.scheme in ("mssql", "sqlserver"):
             from .sources.mssql import _connect
