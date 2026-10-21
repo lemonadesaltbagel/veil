@@ -5,7 +5,9 @@
 #   sample_mflix  https://github.com/neelabalan/mongodb-sample-dataset (users, sessions, first 3000 comments)
 #   user-database https://github.com/redis-developer/redis-datasets
 #   ai4privacy    https://huggingface.co/datasets/ai4privacy/pii-masking-200k (first 1000 English rows)
+#   scripts/fetch_datasets.sh [--no-eval]   (--no-eval: skip ai4privacy, which only the eval script uses)
 set -euo pipefail
+export VEIL_FETCH_EVAL=1; [ "${1:-}" = "--no-eval" ] && VEIL_FETCH_EVAL=0
 DS="$(cd "$(dirname "$0")/.." && pwd)/datasets"; mkdir -p "$DS/mflix"; cd "$DS"
 
 CH=https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources
@@ -22,7 +24,7 @@ curl -fsSL -o redis_users.redis \
   https://raw.githubusercontent.com/redis-developer/redis-datasets/master/user-database/import_users.redis
 
 python3 - <<'PY'
-import json, re, subprocess, uuid
+import json, os, re, subprocess, uuid
 
 # Redis: JSON sessions + a set of emails derived from the first 40 users
 lines = open("redis_users.redis").read().splitlines()[:40]
@@ -39,7 +41,7 @@ with open("redis_extra.redis", "w") as out:
 
 # ai4privacy: 1000 English rows with their labelled PII spans
 rows = []
-for off in range(0, 1000, 100):
+for off in range(0, 1000 if os.environ["VEIL_FETCH_EVAL"] == "1" else 0, 100):
     url = ("https://datasets-server.huggingface.co/rows?dataset=ai4privacy/pii-masking-200k"
            f"&config=default&split=train&offset={off}&length=100")
     data = json.loads(subprocess.run(["curl", "-fsSL", url], capture_output=True, text=True).stdout)
@@ -50,6 +52,7 @@ for off in range(0, 1000, 100):
             mask = json.loads(mask.replace("'", '"')) if isinstance(mask, str) else mask
             rows.append({"id": row["id"], "text": row["source_text"],
                          "pii": [{"value": m["value"], "label": m["label"]} for m in mask]})
-json.dump(rows, open("ai4privacy_en_sample.json", "w"), ensure_ascii=False, indent=0)
+if rows:
+    json.dump(rows, open("ai4privacy_en_sample.json", "w"), ensure_ascii=False, indent=0)
 print(f"datasets ready: chinook, mflix, redis ({len(lines)} sessions), ai4privacy ({len(rows)} rows)")
 PY

@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: prototype
+
+jobs:
+  test:
+    name: tests + bypass matrix (live databases)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Same ports as scripts/dev_dbs.sh, so the tests' default URLs work unchanged.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: veil
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "1"
+        ports: ["53306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["56379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 20
+      mongo:
+        image: mongo:7
+        ports: ["57017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'" --health-interval 5s --health-timeout 10s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install
+        run: |
+          sudo apt-get install -y --no-install-recommends sqlite3 >/dev/null
+          uv sync --locked
+      - name: Cache datasets
+        uses: actions/cache@v4
+        with:
+          path: |
+            prototype/datasets/chinook.sqlite
+            prototype/datasets/Chinook_*.sql
+            prototype/datasets/mflix
+            prototype/datasets/redis_*.redis
+          key: datasets-${{ hashFiles('prototype/scripts/fetch_datasets.sh') }}
+      - name: Fetch datasets
+        run: test -f datasets/chinook.sqlite || scripts/fetch_datasets.sh --no-eval
+      - name: Load the databases
+        env:
+          PG: ${{ job.services.postgres.id }}
+          MY: ${{ job.services.mariadb.id }}
+          RD: ${{ job.services.redis.id }}
+          MG: ${{ job.services.mongo.id }}
+        run: |
+          set -euo pipefail
+          for f in Chinook_PostgreSql.sql pg_app_schema.sql; do docker exec -i "$PG" psql -q -U postgres < "datasets/$f" >/dev/null; done
+          for f in Chinook_MySql.sql mysql_app_schema.sql; do docker exec -i "$MY" mariadb -uroot < "datasets/$f"; done
+          docker exec -i "$RD" redis-cli FLUSHALL >/dev/null
+          for f in redis_users.redis redis_extra.redis; do docker exec -i "$RD" redis-cli < "datasets/$f" >/dev/null; done
+          for c in users sessions comments; do
+            docker exec -i "$MG" mongoimport --quiet --db sample_mflix --collection "$c" --drop < "datasets/mflix/$c.json"
+          done
+      - name: Tests
+        run: uv run pytest -q -rs
+      - name: Bypass matrix
+        run: uv run python -m veil_dev.redteam
+
+  package:
+    name: build + metadata check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build
+        run: uv build
+      - name: Check
+        run: |
+          uvx twine check --strict dist/*
+          # the wheel must hold the runtime package only (no tests, dev harness, datasets)
+          python3 - <<'PY'
+          import glob, sys, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          bad = [n for n in names if not n.startswith(("veil/", "veil_proxy-"))]
+          print(len(names), "files in the wheel")
+          sys.exit(f"unexpected files: {bad}" if bad else 0)
+          PY
+      - name: Install from the wheel and smoke-test
+        run: |
+          uv venv /tmp/smoke && VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
+          /tmp/smoke/bin/veil --help >/dev/null
+          /tmp/smoke/bin/python -c "from veil.detect import KnownValues; k = KnownValues(); print('import ok')"
+
+  platforms:
+    name: unit tests (${{ matrix.os }}, py${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-latest, python: "3.13"}
+          - {os: ubuntu-latest, python: "3.11"}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Tests (database tests skip when unreachable)
+        run: uv run pytest -q
