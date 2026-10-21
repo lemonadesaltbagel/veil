@@ -123,3 +123,47 @@ def test_proxy_warns_and_cli_switches(tmp_path, monkeypatch, capsys):
     finally:
         px.shutdown(); llm.shutdown()
     assert "Stuttgart" not in log.getvalue() and "70174" not in log.getvalue()
+
+
+def _office():
+    """6 people in London, 6 engineers -- but only one London engineer."""
+    k = KnownValues()
+    for i in range(6):
+        k.add_quasi("London", "city", f"p:{i}")
+        k.add_quasi("Engineer", "job_title", f"q:{i}")
+    k.add_quasi("London", "city", "p:99"); k.add_quasi("Engineer", "job_title", "p:99")
+    for i in range(6):  # London accountants: a combination shared by six, not identifying
+        k.add_quasi("Accountant", "job_title", f"p:{i}")
+    return k
+
+
+def test_rare_combination_of_common_values():
+    k = _office()
+    assert k.rare_quasi() == {}                                     # each value alone is common
+    combos = k.quasi_combos("ticket from an Engineer in London\nAccountant in London")
+    assert [(sorted(s.value for s in c), n) for c, n in combos] == [(["Engineer", "London"], 1)]
+    assert k.quasi_combos("an Engineer\nin London") == []           # different lines: not combined
+
+
+def test_combinations_in_warn_and_redact(tmp_path):
+    k = _office()
+    m = Monitor()
+    line = m.check(k, ["Engineer in London reports a bug"])
+    assert "rare combinations" in line and "city+job_title" in line and "London" not in line
+    assert m.check(k, ["Engineer in London again"]) is None          # reported once
+    veil = Veil(Vault(":memory:", b"c"), k)
+    veil.quasi_mode = "redact"
+    out = veil.redact("Engineer in London reports a bug\nAccountant in London too")
+    assert "Engineer" not in out.splitlines()[0] and "London" not in out.splitlines()[0]
+    assert out.splitlines()[1] == "Accountant in London too"         # a common combination stays
+
+
+def test_people_per_value_survive_save_and_load(tmp_path, monkeypatch):
+    monkeypatch.setenv("VEIL_HOME", str(tmp_path))
+    monkeypatch.setenv("VEIL_VAULT_KEY", base64.b64encode(b"v" * 32).decode())
+    monkeypatch.setenv("VEIL_TOKEN_SECRET", base64.b64encode(b"t" * 32).decode())
+    v = state.load()
+    v.known = _office()
+    state.save_known(v.known, v.vault.cipher)
+    k = state.load().known
+    assert k.combo_count(["London", "Engineer"]) == 1 and k.combo_count(["London", "Accountant"]) == 6

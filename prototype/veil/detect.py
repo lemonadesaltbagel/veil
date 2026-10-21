@@ -12,6 +12,7 @@ Allowlists drop reserved/test values; existing tokens are never re-redacted.
 from __future__ import annotations
 
 import ipaddress
+import itertools
 import json
 import os
 import re
@@ -131,6 +132,12 @@ class KnownValues:
         # [kind, number of records with it, group]. Only rare ones identify anyone.
         self._quasi: dict[str, list] = {}
         self._quasi_pattern: Matcher | None = None
+        # who has each quasi value (person ids), for combinations: city + job title can be
+        # unique even when each is common. Counts are intersections, computed on demand.
+        self._qi_people: dict[str, set[int]] = {}
+        self._qi_groups: dict[str, int] = {}
+        self._qi_all: Matcher | None = None
+        self._combo_cache: dict[frozenset, int] = {}
 
     def add(self, value: str, kind: str, group: str | None = None) -> None:
         value = value.strip()
@@ -159,6 +166,8 @@ class KnownValues:
         new = KnownValues(self.min_len)
         new._entries, new._aliases, new._emails_ci = dict(self._entries), dict(self._aliases), dict(self._emails_ci)
         new._quasi = {v: list(x) for v, x in self._quasi.items()}
+        new._qi_people = {v: set(p) for v, p in self._qi_people.items()}
+        new._qi_groups = dict(self._qi_groups)
         return new
 
     # -- quasi-identifiers ---------------------------------------------------
@@ -168,18 +177,24 @@ class KnownValues:
             value = value.removesuffix(" 00:00:00").removesuffix("T00:00:00")
         if len(value) < 4 or value.lower() in STOPWORDS or value.lower() in ALLOW or value in self._entries:
             return
-        if kind in ("city", "company", "job_title") and value.lower() in COMMON_WORDS:
-            return  # "Nice", "Mobile": a word, not a rare place
         entry = self._quasi.get(value)
         if entry is None:
-            self._quasi[value] = [kind, 1, group]
-        elif entry[2] != group:
+            entry = self._quasi[value] = [kind, 0, group]
+        if group is not None:
+            people = self._qi_people.setdefault(value, set())
+            people.add(self._qi_groups.setdefault(group, len(self._qi_groups)))
+            entry[1] = len(people)
+        else:
             entry[1] += 1
-        self._quasi_pattern = None
+        self._quasi_pattern = self._qi_all = None
+        self._combo_cache.clear()
 
     def rare_quasi(self) -> dict[str, list]:
-        """Quasi-identifiers shared by fewer than QUASI_K records (k-anonymity)."""
-        return {v: e for v, e in self._quasi.items() if e[1] < QUASI_K}
+        """Quasi-identifiers shared by fewer than QUASI_K records (k-anonymity). Dictionary
+        words ("Nice", "Mobile", "Engineer") are left to combinations: alone they'd match
+        ordinary text."""
+        return {v: e for v, e in self._quasi.items() if e[1] < QUASI_K
+                and not (e[0] in ("city", "company", "job_title") and v.lower() in COMMON_WORDS)}
 
     def find_quasi(self, text: str) -> list[Span]:
         if not self._quasi:
@@ -188,6 +203,44 @@ class KnownValues:
             self._quasi_pattern = Matcher(self.rare_quasi())
         return [Span(a, b, self._quasi[n][0], n, self._quasi[n][2], priority=5)
                 for a, b, n in self._quasi_pattern.find(text)]
+
+    def combo_count(self, values) -> int:
+        """How many people have all these quasi values."""
+        key = frozenset(values)
+        if key not in self._combo_cache:
+            sets = sorted((self._qi_people.get(v, set()) for v in key), key=len)
+            self._combo_cache[key] = len(set.intersection(*sets)) if sets else 0
+        return self._combo_cache[key]
+
+    def quasi_combos(self, text: str, max_values: int = 8) -> list[tuple[list[Span], int]]:
+        """Combinations of quasi values on one line (2-3 different kinds) that fewer than
+        QUASI_K people share: identifying together, though each value may be common."""
+        if not self._qi_people:
+            return []
+        if self._qi_all is None:
+            self._qi_all = Matcher(self._quasi)
+        out, base = [], 0
+        for line in text.split("\n"):
+            hits = {}
+            for a, b, n in self._qi_all.find(line):
+                hits.setdefault(n, Span(base + a, base + b, self._quasi[n][0], n, None, priority=5))
+            base += len(line) + 1
+            if len({s.kind for s in hits.values()}) < 2:
+                continue
+            # values rare on their own are reported/redacted individually; combinations are
+            # about values that are common alone (or dictionary words, never matched alone)
+            spans = [s for s in hits.values() if self._quasi[s.value][1] >= QUASI_K
+                     or (s.kind in ("city", "company", "job_title") and s.value.lower() in COMMON_WORDS)][:max_values]
+            found = set()
+            for size in (2, 3):
+                for combo in itertools.combinations(spans, size):
+                    if len({s.kind for s in combo}) < size or any(set(c) <= set(combo) for c in found):
+                        continue
+                    n = self.combo_count(s.value for s in combo)
+                    if 0 < n < QUASI_K:
+                        found.add(combo)
+                        out.append((list(combo), n))
+        return out
 
     def group_of(self, s: str) -> str | None:
         value = self.canonical(s.strip())
@@ -246,7 +299,7 @@ def encoded_forms(value: str, kind: str) -> set[str]:
 
 
 def detect(text: str, known: KnownValues | None, is_token, extra: list[Span] | None = None) -> list[Span]:
-    spans: list[Span] = (list(known.find(text)) if known else []) + list(extra or [])
+    spans: list[Span] = (list(known.find(text)) if known is not None else []) + list(extra or [])
     for kind, pattern, check in PATTERNS:
         for m in pattern.finditer(text):
             v = m.group()

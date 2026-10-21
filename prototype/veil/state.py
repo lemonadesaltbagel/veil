@@ -67,13 +67,15 @@ def load() -> Veil:
         rows = json.load(open(legacy))
     else:
         rows = []
-    quasi = []
-    if isinstance(rows, dict):  # v2: {"rows": [...], "quasi": [...]}
-        rows, quasi = rows.get("rows", []), rows.get("quasi", [])
+    quasi, qi = [], {}
+    if isinstance(rows, dict):  # v2: {"rows": [...], "quasi": [...], "qi_people": {...}, "qi_groups": [...]}
+        rows, quasi, qi = rows.get("rows", []), rows.get("quasi", []), rows
     for value, kind, group in rows:
         known.add(value, kind, group)
     for value, kind, count, group in quasi:
         known._quasi[value] = [kind, count, group]
+    known._qi_groups = {g: i for i, g in enumerate(qi.get("qi_groups", []))}
+    known._qi_people = {v: set(p) for v, p in qi.get("qi_people", {}).items()}
     veil = Veil(Vault(os.path.join(h, "vault.db"), token_secret, cipher), known)
     from .quasi import mode as quasi_mode
     veil.quasi_mode = quasi_mode(h)  # in-process hooks follow `veil quasi` too
@@ -89,7 +91,10 @@ def save_known(known: KnownValues, cipher=None) -> None:
     cipher = cipher or Cipher(_key_material(h)[0])
     rows = [[v, k, g] for v, (k, g) in known._entries.items()]
     quasi = [[v, k, n, g] for v, (k, n, g) in known._quasi.items()]
-    _private_write(os.path.join(h, "known.enc"), cipher.seal(json.dumps({"rows": rows, "quasi": quasi}), "known"))
+    groups = [g for g, _ in sorted(known._qi_groups.items(), key=lambda kv: kv[1])]
+    doc = {"rows": rows, "quasi": quasi, "qi_groups": groups,
+           "qi_people": {v: sorted(p) for v, p in known._qi_people.items()}}
+    _private_write(os.path.join(h, "known.enc"), cipher.seal(json.dumps(doc), "known"))
 
 
 # -- remembered seed sources (encrypted: database URLs can carry passwords) --------------

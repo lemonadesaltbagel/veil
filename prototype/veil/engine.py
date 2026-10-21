@@ -67,7 +67,7 @@ class TokenPattern:
 class Veil:
     def __init__(self, vault: Vault, known: KnownValues | None = None, ner=None):
         self.vault = vault
-        self.known = known or KnownValues()
+        self.known = known if known is not None else KnownValues()  # an empty set is still this set
         self.ner = ner  # optional free-text detector (veil.ner.GlinerDetector)
         self.quasi_mode = "warn"  # "redact": rare quasi-identifiers are pseudonymised too (veil/quasi.py)
         self._tokens = TokenPattern()
@@ -88,8 +88,10 @@ class Veil:
             extra = [s for s in self.ner.find(text)
                      if not any(a < s.end and s.start < b for a, b in tokens) and s.value.lower() not in codes]
         if self.quasi_mode == "redact":
-            # no person group: a city shared by three people must not link them to one code
-            extra = (extra or []) + [dataclasses.replace(s, group=None) for s in self.known.find_quasi(text)]
+            # rare values, and common values in a rare combination on the same line (city +
+            # job title of one person); no person group: shared values must not link people
+            extra = (extra or []) + [dataclasses.replace(s, group=None) for s in self.known.find_quasi(text)] \
+                + [s for combo, _ in self.known.quasi_combos(text) for s in combo]
         spans = detect(text, self.known, self.vault.is_token, extra)
         if not spans:
             return text
