@@ -66,25 +66,41 @@ def _codes(text: str) -> str:
 
 
 def norm(text: str) -> str:
-    """Case- and whitespace-insensitive form (also the form needles are compared in)."""
-    return re.sub(r"\s+", "", text).casefold()
+    """Word view: case-folded, whitespace runs collapsed to one space. Values keep their own
+    spaces, so separate words are never glued together ('matches on' must not become
+    '...atcheson', a seeded surname)."""
+    return re.sub(r"\s+", " ", text).casefold().strip()
 
 
-def strong_views(text: str) -> list[str]:
-    """Normalised views undoing cheap one-command transforms: case changes, spacing /
-    one-char-per-line, reversal, rot13, hex runs (sql hex(), xxd -p), URL encoding.
-    Compare against norm()'d needles of >= 8 chars only (short values collide)."""
-    base = [text] + views(text)
-    out = set()
-    for t in base:
+def norm_chars(text: str) -> str:
+    """Character view: only *runs of single characters* are joined ('L e o n i e', one char per
+    line from `grep -o .`); ordinary words are left alone. Compared against values with all
+    whitespace removed."""
+    return _SPREAD.sub(lambda m: re.sub(r"\s+", "", m.group()) + " ", text).casefold()
+
+
+def squash(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
+
+
+_SPREAD = re.compile(r"(?:(?<!\S)\S(?:\s+|$)){4,}")
+
+
+def strong_views(text: str) -> list[tuple[str, str]]:
+    """(mode, view) pairs undoing cheap one-command transforms. mode 'w' (compare with
+    norm(value)): case changes, reversal, rot13, hex runs (sql hex(), xxd -p), URL
+    encoding. mode 'c' (compare with squash(value)): spaced-out letters, one char per line.
+    Only for values >= 8 chars: short values collide."""
+    out: set[tuple[str, str]] = set()
+    for t in [text] + views(text):
         for v in (t, unquote(t), _hex(t)):
-            n = norm(v)
-            out |= {n, n[::-1], codecs.encode(n, "rot13")}
-            # rev reverses each line, not the whole text
-            out.add(norm("\n".join(line[::-1] for line in v.splitlines())))
+            w = norm(v)
+            out |= {("w", w), ("w", w[::-1]), ("w", codecs.encode(w, "rot13")),
+                    ("w", norm("\n".join(line[::-1] for line in v.splitlines()))),  # rev: per line
+                    ("c", norm_chars(v))}
     return list(out)
 
 
-def deep_views(text: str) -> list[str]:
+def deep_views(text: str) -> list[tuple[str, str]]:
     """Oracle for audits/red-team: strong views plus character-code sequences."""
-    return strong_views(text) + [norm(_codes(text))]
+    return strong_views(text) + [("w", norm(_codes(text))), ("c", norm_chars(_codes(text)))]

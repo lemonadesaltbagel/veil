@@ -119,3 +119,17 @@ def test_schema_property_named_type_does_not_crash(veil):
             "messages": [{"role": "user", "content": "hi leonekohler@surfeu.de"}]}
     fixed, findings = Guard(veil).enforce(redact_request(veil, body))
     assert fixed["tools"][0]["input_schema"]["properties"]["type"] == {"type": "string", "enum": ["file", "dir"]}
+
+
+def test_word_gluing_does_not_trigger_on_common_phrases():
+    """Found in the pilot: with ~40k seeded values, whitespace-stripping turned 'retry logic
+    matches on wording' into '...atcheson...' (a seeded surname) and would have withheld it."""
+    from veil.detect import KnownValues
+    known = KnownValues()
+    known.add("Atcheson", "last_name", "u:1"); known.add("Messager", "last_name", "u:2")
+    v = Veil(Vault(":memory:", b"g"), known)
+    text = "Claude Code's retry logic matches on wording; the message request failed"
+    body = redact_request(v, {"messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t", "content": text}]}]})
+    fixed, findings = Guard(v).enforce(body)
+    assert findings == [] and fixed["messages"][0]["content"][0]["content"] == text

@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .decode import norm, strong_views, views
+from .decode import norm, squash, strong_views, views
 from .detect import WORD, detect, encoded_forms
 from .engine import Veil
 from .match import Matcher
@@ -89,12 +89,13 @@ class _Index:
         self.matchers = [Matcher([n for n, (_, _, f) in needles.items() if f != "base64"]),
                          Matcher([n for n, (_, _, f) in needles.items() if f == "base64"], bounded=False)]
         # transformed copies (UPPER, s p a c e d, reversed, rot13, hex, url) of values >= 8 chars
-        self.norm_values: dict[str, tuple[str, str]] = {}
+        # mode 'w': word view (spaces kept); mode 'c': character view (spaces removed)
+        self.norm_values: dict[str, dict[str, tuple[str, str]]] = {"w": {}, "c": {}}
         for value, kind in values.items():
-            n = norm(value)
-            if len(n) >= 8:
-                self.norm_values.setdefault(n, (value, kind))
-        self.norm = Matcher(list(self.norm_values), bounded=False)
+            if len(squash(value)) >= 8:
+                self.norm_values["w"].setdefault(norm(value), (value, kind))
+                self.norm_values["c"].setdefault(squash(value), (value, kind))
+        self.norm = {m: Matcher(list(v), bounded=False) for m, v in self.norm_values.items()}
         # Truncated values (cut -c, substr, fixed-width columns): a value's head ending
         # exactly at a line end, or its tail starting exactly at a line start.
         self.heads, self.tails = {}, {}
@@ -173,10 +174,10 @@ class Guard:
         # Values hidden by a transform can't be repaired in place: withhold the whole
         # string. (1) case, spacing, reversal, rot13, hex, url  (2) escapes/line wrapping.
         if content and len(s) >= 8:
-            for view in strong_views(s):
+            for mode, view in strong_views(s):
                 for ix in indexes:
-                    for _, _, n in ix.norm.find(view):
-                        value, kind = ix.norm_values[n]
+                    for _, _, n in ix.norm[mode].find(view):
+                        value, kind = ix.norm_values[mode][n]
                         if value in s:
                             continue  # verbatim: the plain pass below repairs it in place
                         findings.append(Finding(path, kind, "transformed", "[withheld]",

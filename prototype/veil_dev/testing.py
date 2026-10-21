@@ -216,13 +216,15 @@ def find_leaks(payload: str, values) -> list[str]:
         texts += [v for s in strings for v in views(s)]
     except ValueError:
         texts += views(payload)
-    from veil.decode import deep_views, norm
+    from veil.decode import deep_views, norm, squash
     found = {v for v in values for t in texts if re.search(f"(?<![{WORD}]){re.escape(v)}(?![{WORD}])", t)}
     # transformed forms (reversed, rot13, upper-cased, spaced out, hex, url, char codes)
     deep = [d for t in texts for d in deep_views(t)]
+    words, chars = [v for m, v in deep if m == "w"], [v for m, v in deep if m == "c"]
     for v in values:
-        nv = norm(v)
-        if v not in found and len(nv) >= 8 and any(nv in d for d in deep):
+        if v in found or len(squash(v)) < 8:
+            continue
+        if any(norm(v) in d for d in words) or any(squash(v) in d for d in chars):
             found.add(v)
     return sorted(found)
 
