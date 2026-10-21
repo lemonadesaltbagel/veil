@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import time
 
 import httpx
 import pytest
@@ -90,6 +91,14 @@ def test_direct_identifiers():
     assert {f.path: f.kind for f in plan(people)}["passport_no"] == "id_number"
 
 
+def _sent(rec, n):
+    """The proxy records an exchange after answering: wait for the n-th record."""
+    deadline = time.time() + 5
+    while len(rec.exchanges) < n and time.time() < deadline:
+        time.sleep(0.01)
+    return rec.exchanges[n - 1]["sent"]
+
+
 def test_proxy_warns_and_cli_switches(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("VEIL_HOME", str(tmp_path))
     monkeypatch.setenv("VEIL_VAULT_KEY", base64.b64encode(b"v" * 32).decode())
@@ -104,11 +113,11 @@ def test_proxy_warns_and_cli_switches(tmp_path, monkeypatch, capsys):
         with httpx.Client(trust_env=False) as c:
             c.post(url, json=body)
             assert "quasi-identifiers reached the model: city x1, postal_code x1" in log.getvalue()
-            assert "Stuttgart" in json.dumps(rec.exchanges[-1]["sent"])   # warn leaves values
+            assert "Stuttgart" in json.dumps(_sent(rec, 1))              # warn leaves values
             cli.main(["quasi", "redact"])
             assert "quasi-identifiers: redact" in capsys.readouterr().out
             c.post(url, json=body)
-            assert "Stuttgart" not in json.dumps(rec.exchanges[-1]["sent"])
+            assert "Stuttgart" not in json.dumps(_sent(rec, 2))
             health = c.get(url.replace("/v1/messages", "/veil/health")).json()
             assert health["quasi"] == "redact" and health["quasi_reported"] == 2
     finally:

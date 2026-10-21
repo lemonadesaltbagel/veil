@@ -51,6 +51,10 @@ def load() -> Veil:
     from .detect import set_allowlist
     h = home()
     set_allowlist(config().get("allow", []))
+    from .rotate import finish_interrupted
+    if finish_interrupted(h):
+        import sys
+        print("[veil] finished an interrupted vault-key rotation", file=sys.stderr)
     vault_key, token_secret = _key_material(h)
     cipher = Cipher(vault_key)
     known = KnownValues()

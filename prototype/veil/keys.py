@@ -25,6 +25,11 @@ SERVICE = "veil"
 _warned = False
 
 
+def _secret_service() -> bool:
+    return sys.platform.startswith("linux") and bool(shutil.which("secret-tool")) \
+        and os.environ.get("VEIL_SECRET_SERVICE", "1") != "0"
+
+
 def _env_name(name: str) -> str:
     return "VEIL_" + name.upper().replace("-", "_")
 
@@ -112,7 +117,7 @@ def get_key(name: str, home: str, initial: bytes | None = None) -> bytes:
         key = initial or secrets.token_bytes(32)
         if _keychain_put(name, key):
             return key
-    elif sys.platform.startswith("linux") and shutil.which("secret-tool") and os.environ.get("VEIL_SECRET_SERVICE", "1") != "0":
+    elif _secret_service():
         key = _secret_tool_get(name)
         if key:
             return key
@@ -128,7 +133,7 @@ def set_key(name: str, home: str, key: bytes) -> str:
         return "env"
     if sys.platform == "darwin" and shutil.which("security") and _keychain_put(name, key):
         return "keychain"
-    if sys.platform.startswith("linux") and shutil.which("secret-tool") and _secret_tool_put(name, key):
+    if _secret_service() and _secret_tool_put(name, key):
         return "secret-service"
     d = os.path.join(home, "keys")
     os.makedirs(d, mode=0o700, exist_ok=True)
@@ -137,3 +142,31 @@ def set_key(name: str, home: str, key: bytes) -> str:
     with os.fdopen(fd, "wb") as f:
         f.write(key)
     return "file"
+
+
+def peek_key(name: str, home: str) -> bytes | None:
+    """Key `name` if it exists anywhere; never creates one."""
+    env = os.environ.get(_env_name(name))
+    if env:
+        return base64.b64decode(env)
+    if sys.platform == "darwin" and shutil.which("security"):
+        key = _keychain_get(name)
+        if key:
+            return key
+    elif _secret_service():
+        key = _secret_tool_get(name)
+        if key:
+            return key
+    path = os.path.join(home, "keys", name)
+    return open(path, "rb").read() if os.path.exists(path) else None
+
+
+def delete_key(name: str, home: str) -> None:
+    if sys.platform == "darwin" and shutil.which("security") and _keychain_args() is not None:
+        subprocess.run(["security", "delete-generic-password", "-s", SERVICE, "-a", name, *_keychain_args()],
+                       capture_output=True, timeout=30)
+    elif _secret_service():
+        subprocess.run(["secret-tool", "clear", "service", SERVICE, "account", name], capture_output=True, timeout=30)
+    path = os.path.join(home, "keys", name)
+    if os.path.exists(path):
+        os.remove(path)

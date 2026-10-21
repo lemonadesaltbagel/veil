@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -22,15 +23,13 @@ from .match import Matcher
 
 WORD = r"A-Za-z0-9_"
 def _load_words() -> frozenset[str]:
-    """Lower-case common words (macOS/Linux /usr/share/dict/words; lower-case entries only,
-    so proper names like 'Jennifer' or 'Hansen' are not in it)."""
-    for path in ("/usr/share/dict/words", "/usr/dict/words"):
-        try:
-            with open(path, encoding="utf-8", errors="ignore") as f:
-                return frozenset(w.strip() for w in f if w.strip().islower())
-        except OSError:
-            continue
-    return frozenset()
+    """Lower-case common English words (Webster's Second, public domain; vendored so every
+    platform filters the same: Linux runners and Windows have no /usr/share/dict/words).
+    Lower-case entries only, so proper names like 'Jennifer' or 'Hansen' are not in it."""
+    import gzip
+    path = os.path.join(os.path.dirname(__file__), "data", "words.txt.gz")
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        return frozenset(w for w in f.read().split("\n") if w)
 
 
 COMMON_WORDS = _load_words()

@@ -276,6 +276,19 @@ Database seeding details: see `docs/DATABASES.md`.
   - first request after a re-seed: 94 s → 0.11 s;
   - guard p50 / max: 86 / 815 ms → 68 / 69 ms.
 
+- **Values in second languages** (python -c, heredocs, bash -c, jq, ...). Probing showed that a value
+  restored inside `python3 -c "…'X'…"` was escaped only for the shell. That gave wrong values and
+  syntax errors; nothing ran in the probe, but by luck. The rewrite models every layer. A fuzzer of
+  random nestings, with every command executed, found 11 executions in its first 3,000 commands, all
+  through output re-entering code: `eval eval X`, `$(printf %s X) | bash`, an unquoted heredoc with
+  backticks. Rules for where output becomes code closed them: 0 in 50,000 since.
+- **Two bugs found along the way:**
+  - Fragment detection scanned `json.dumps(tool_input)`, where `\n` glued an `n` onto a token at
+    the start of a line. Multi-line commands got a false "fragment" notice, and Edit content at a
+    line start was not restored, so a pseudonym could be written into a file.
+  - Per-project hooks did not carry their vault home. A hook rejected by the project's proxy fell
+    back to the *default* vault.
+
 ## 13. Known limitations (honest list)
 
 - `write_stdin` (Codex interactive sessions) never receives real values, so interactive tools (e.g. a
@@ -290,9 +303,13 @@ Database seeding details: see `docs/DATABASES.md`.
 - Fragments of pseudonyms (LIKE/grep on part of a token) can't match real data. A Bash command
   containing one is replaced with a notice naming the whole tokens; a Grep pattern is expanded to that
   person's real values. A fragment assembled inside a script is not caught.
-- Shell escaping covers sh quoting + SQL literals in double-quoted strings; other interpreters
-  embedded in commands (`python -c "…"`, `jq '…'`, heredocs) are escaped only at the shell level.
+- Shell escaping models sh quoting, heredocs, substitutions and the common embedded interpreters.
+  A language veil doesn't know (a custom DSL in a string), or data flowing into code in ways other
+  than pipes and variables (writing a script file, then running it), gets shell-level escaping only.
+  Where a value would reach code, only inert values are restored.
 - Transform coverage is a matrix of 21 known techniques, not a proof: an agent can always invent a new
   encoding (custom scripts). Seeded values < 8 chars are only checked verbatim/encoded.
 - Free‑text PII not in the seed (e.g. a support ticket mentioning a third party) needs the NER layer.
-- Quasi‑identifiers (tenant names, rare amounts, timestamps) can still enable re‑identification.
+- Quasi‑identifiers: rare cities, postal codes, birth dates, companies and job titles of seeded people
+  are reported (or pseudonymised with `veil quasi redact`). Other attributes (rare amounts, timestamps,
+  free-text descriptions) and combinations of common values can still enable re‑identification.

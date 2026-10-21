@@ -105,8 +105,10 @@ class Veil:
     def token_pattern(self) -> TokenPattern | None:
         if hasattr(self.vault, "refresh"):
             self.vault.refresh()  # tokens other processes (hooks) allocated
+        if len(self.vault._by_token) < self._tokens.count:  # tokens dropped (key rotation): start over
+            self._tokens = TokenPattern()
         tp = self._tokens
-        if tp.count != len(self.vault._by_token):  # the vault only ever grows, in insertion order
+        if tp.count != len(self.vault._by_token):  # the vault grows in insertion order
             with self._tokens_lock:
                 new = list(itertools.islice(self.vault._by_token, tp.count, None))
                 if new:

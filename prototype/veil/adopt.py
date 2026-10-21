@@ -54,6 +54,11 @@ def redact_uri(uri: str) -> str:
     return re.sub(r"//([^:@/]+)(:[^@/]*)?@", r"//\1:***@", uri)
 
 
+def state_home() -> str:
+    from .state import home
+    return home()
+
+
 def veil_command() -> list[str]:
     """How hooks and the service invoke veil (absolute; independent of cwd/venv activation)."""
     return [sys.executable, "-m", "veil.cli"]
@@ -80,8 +85,10 @@ def write_claude_settings(project: str, port: int, hooks: bool = True, deny_env:
             entries = [e for e in all_hooks.get(event, [])
                        if "veil.cli hook" not in json.dumps(e) and "veil.hookclient" not in json.dumps(e)]
             fast = " ".join(f'"{c}"' if " " in c else c for c in [sys.executable, "-m", "veil.hookclient"])
+            home = state_home()
+            home_arg = f' --home "{home}"' if " " in home else f" --home {home}"
             entries.append({"matcher": "*", "hooks": [{"type": "command",
-                                                       "command": f"{fast} {kind} --port {port}"}]})
+                                                       "command": f"{fast} {kind} --port {port}{home_arg}"}]})
             all_hooks[event] = entries
     if deny_env:
         deny = settings.setdefault("permissions", {}).setdefault("deny", [])

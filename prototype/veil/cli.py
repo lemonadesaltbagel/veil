@@ -87,6 +87,30 @@ def _status(veil, args) -> int:
     return 0 if h and wired else 1
 
 
+def _keys(args) -> int:
+    from . import rotate
+    try:
+        import httpx
+        httpx.get(f"http://127.0.0.1:{args.port}/veil/health", timeout=1, trust_env=False)
+        raise SystemExit(f"a veil proxy is running on :{args.port}; stop it first "
+                         "(`veil service uninstall` or Ctrl-C), rotate, then start it again")
+    except httpx.HTTPError:
+        pass
+    h = state.home()
+    if args.token_secret:
+        r = rotate.rotate_token_secret(h, state.load().vault, drop_old=args.drop_old)
+        print(f"token secret rotated: new pseudonyms from now on; "
+              + (f"{r['dropped']} old pseudonyms forgotten" if args.drop_old else
+                 f"{r['retired']} old pseudonyms retired (still restored in existing conversations)")
+              + ". Teams: `veil team export` again and have everyone join.")
+    else:
+        state.load()  # finishes an interrupted rotation, checks the current key works
+        r = rotate.rotate_vault_key(h)
+        print(f"vault key rotated: re-encrypted {r['vault_rows']} vault rows, {r['retired']} retired, "
+              f"{r['files']} files; pseudonyms unchanged")
+    return 0
+
+
 def _team(args) -> int:
     import os
     from . import team
@@ -174,6 +198,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("seed-env")
     sub.add_parser("redact"); sub.add_parser("rehydrate")
     s = sub.add_parser("display"); s.add_argument("mode", nargs="?", choices=["real", "tokens"])
+    s = sub.add_parser("keys", help="rotate the vault key (re-encrypt) or the token secret (new pseudonyms)")
+    s.add_argument("action", choices=["rotate"])
+    s.add_argument("--token-secret", action="store_true", help="new pseudonyms instead of a new vault key")
+    s.add_argument("--drop-old", action="store_true", help="with --token-secret: forget old pseudonyms")
+    s.add_argument("--port", type=int, default=8787, help="refuse while a proxy listens here")
     s = sub.add_parser("quasi", help="quasi-identifiers (city, zip, birth date, company, job title): warn|redact|off")
     s.add_argument("mode", nargs="?", choices=["warn", "redact", "off"])
     for name in ("reveal", "share"):
@@ -217,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"display: {mode}" + ("  (VEIL_DISPLAY overrides config)" if __import__("os").environ.get("VEIL_DISPLAY") else "")
               + ("\nnote: a managed `x-veil-display: tokens` header still forces pseudonyms" if mode == "real" else ""))
         return 0
+    if args.cmd == "keys":
+        return _keys(args)
     if args.cmd == "quasi":
         from . import quasi
         if args.mode:

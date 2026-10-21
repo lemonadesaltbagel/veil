@@ -80,3 +80,13 @@ def test_launch_agent_plist(tmp_path, monkeypatch):
     assert plist["KeepAlive"] and plist["EnvironmentVariables"]["VEIL_HOME"].endswith("home")
     if shutil.which("plutil"):  # macOS only
         assert subprocess.run(["plutil", "-lint", path], capture_output=True).returncode == 0
+
+
+def test_per_project_home_reaches_the_hooks(tmp_path, monkeypatch):
+    # a second proxy with its own vault: VEIL_HOME=~/.veil-acme veil init PROJECT --port 8788
+    monkeypatch.setenv("VEIL_HOME", str(tmp_path / "veil-acme"))
+    p = make_project(tmp_path)
+    s = json.load(open(adopt.write_claude_settings(str(p), 8788)))
+    cmd = s["hooks"]["PreToolUse"][-1]["hooks"][0]["command"]
+    assert cmd.endswith(f"pre --port 8788 --home {tmp_path / 'veil-acme'}")
+    assert s["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8788"

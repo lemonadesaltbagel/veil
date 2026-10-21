@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS entities_v2 (
     grp   BLOB,                     -- sealed(group, aad=token+"|grp")
     PRIMARY KEY (kind, vkey)
 );
+-- tokens from a previous token secret: still rehydrated, never issued again
+CREATE TABLE IF NOT EXISTS retired (
+    token TEXT PRIMARY KEY,
+    value BLOB NOT NULL             -- sealed(value, aad=token)
+);
 """
 
 
@@ -45,6 +50,8 @@ class Vault:
         self._group_of: dict[str, str | None] = {}
         self._migrate_v1()
         self._last_rowid = 0
+        for token, blob in self._db.execute("SELECT token, value FROM retired"):
+            self._by_token[token] = self.cipher.open(blob, token)
         self.refresh()
 
     def refresh(self) -> int:
@@ -128,6 +135,24 @@ class Vault:
         self._group_of[token] = group
         self.version += 1
         return token
+
+    def retire_all(self, drop: bool = False) -> int:
+        """Stop issuing the current tokens (a new token secret follows). Kept for
+        rehydration unless `drop`. Returns how many tokens were affected."""
+        with self._lock, self._db:
+            n = self._db.execute("SELECT count(*) FROM entities_v2").fetchone()[0]
+            if not drop:
+                self._db.execute("INSERT OR REPLACE INTO retired (token, value) SELECT token, value FROM entities_v2")
+            else:
+                self._db.execute("DELETE FROM retired")
+            self._db.execute("DELETE FROM entities_v2")
+        self._by_value.clear()
+        self._group_of.clear()
+        if drop:
+            self._by_token.clear()
+        self._last_rowid = 0
+        self.version += 1
+        return n
 
     def value_for(self, token: str) -> str | None:
         if token not in self._by_token:

@@ -1,6 +1,6 @@
 """Fast Claude Code hook: forwards the hook event to the running veil proxy.
 
-    python -m veil.hookclient pre|post [--port 8787]
+    python -m veil.hookclient pre|post [--port 8787] [--home ~/.veil]
 
 Stdlib only (no vault load, no crypto import): ~30 ms instead of ~260 ms. If the
 proxy is not reachable it falls back to the in-process hook (correct, slower).
@@ -17,6 +17,8 @@ import urllib.request
 def main(argv: list[str]) -> int:
     kind = argv[0] if argv else "post"
     port = int(argv[argv.index("--port") + 1]) if "--port" in argv else int(os.environ.get("VEIL_PORT", "8787"))
+    if "--home" in argv:  # per-project vaults: the proxy on this port uses this home
+        os.environ["VEIL_HOME"] = argv[argv.index("--home") + 1]
     raw = sys.stdin.read()
     home = os.environ.get("VEIL_HOME", os.path.expanduser("~/.veil"))
     try:
