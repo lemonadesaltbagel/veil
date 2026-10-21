@@ -3,8 +3,9 @@ class Veil < Formula
 
   desc "Privacy proxy for AI coding agents: models see pseudonyms, you keep real values"
   homepage "https://github.com/lemonadesaltbagel/veil"
-  url "https://files.pythonhosted.org/packages/f6/ec/0dc63fdb9bba058b6043beed24e635b9dffecb7e3a5698c2c8f516fef0ed/veil_proxy-0.2.1.tar.gz"
-  sha256 "a8702ca2a5f323eb3b73f31b70bcad8c9e85f025b59ed8143019b44b85c4e4b9"
+  url "https://files.pythonhosted.org/packages/ac/78/c2067660735c01e7d182f523141f4a138db397d4789b5b770064744c90d1/veil_proxy-0.3.0.tar.gz"
+  sha256 "1b06bb83d25fd046f373bdd003cd642dd5c89dbd9d979458c095a889d4497697"
+  license "Apache-2.0"
 
   depends_on "cryptography"
   depends_on "python@3.14"
