@@ -3,6 +3,7 @@
 import json
 import os
 import plistlib
+import shutil
 import subprocess
 import threading
 from http.server import ThreadingHTTPServer
@@ -77,4 +78,5 @@ def test_launch_agent_plist(tmp_path, monkeypatch):
     plist = plistlib.load(open(path, "rb"))
     assert plist["ProgramArguments"][-4:] == ["--port", "8787", "--upstream", "https://api.anthropic.com"]
     assert plist["KeepAlive"] and plist["EnvironmentVariables"]["VEIL_HOME"].endswith("home")
-    assert subprocess.run(["plutil", "-lint", path], capture_output=True).returncode == 0
+    if shutil.which("plutil"):  # macOS only
+        assert subprocess.run(["plutil", "-lint", path], capture_output=True).returncode == 0

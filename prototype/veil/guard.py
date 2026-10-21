@@ -197,11 +197,12 @@ class Guard:
                     value, kind, form = ix.needles[needle]
                     tok = self._token(value, kind)
                     hits.append((start, end, "[veil:base64-redacted]" if form == "base64" else tok, kind, form))
-        if content and not frozen and "\n" in s:
+        if content and not frozen and ("\n" in s or "\ufffd" in s):
             pattern = self.veil.token_pattern()
             tokens = [(m.start(), m.end()) for m in pattern.finditer(s)] if pattern else []
-            line_end = lambda i: i == len(s) or s[i] in "\r\n"
-            line_start = lambda i: i == 0 or s[i - 1] == "\n"
+            # U+FFFD: a byte-wise cut (GNU `cut -b`, head -c) split a UTF-8 character
+            line_end = lambda i: i == len(s) or s[i] in "\r\n\ufffd"
+            line_start = lambda i: i == 0 or s[i - 1] in "\n\ufffd"
             word = lambda c: c.isalnum() or c == "_"
             for ix in indexes:
                 for which, matcher in zip(("head", "tail"), ix.partial):

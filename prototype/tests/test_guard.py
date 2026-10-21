@@ -133,3 +133,14 @@ def test_word_gluing_does_not_trigger_on_common_phrases():
         {"type": "tool_result", "tool_use_id": "t", "content": text}]}]})
     fixed, findings = Guard(v).enforce(body)
     assert findings == [] and fixed["messages"][0]["content"][0]["content"] == text
+
+
+def test_byte_cut_mid_character_is_still_a_truncation(veil):
+    # GNU `cut -b` / `head -c` split UTF-8; decoding leaves U+FFFD where the cut fell
+    for text in ('customer="Leonie K�',                          # one line, no newline
+                 'invoice=1 customer="Leonie Köhl�\ninvoice=2 ok'):
+        body = {"model": "m", "messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": text}]}]}
+        sent, _ = Guard(veil).enforce(redact_request(veil, body))
+        out = sent["messages"][0]["content"][0]["content"]
+        assert "Leonie K" not in out, out

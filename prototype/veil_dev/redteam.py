@@ -34,6 +34,7 @@ TECHNIQUES = [
     ("one char per line", "grep -o . app.log | head -3000"),
     ("letters spaced out (sed)", "sed 's/./& /g' app.log"),
     ("cut columns mid-value", "cut -c1-95 app.log"),
+    ("cut bytes mid-character", "LC_ALL=C cut -b1-95 app.log"),
     ("sql hex()", "sqlite3 chinook.sqlite \"select hex(Email), hex(LastName) from Customer where CustomerId <= 5\""),
     ("sql upper()", "sqlite3 chinook.sqlite \"select upper(FirstName || ' ' || LastName) from Customer where CustomerId <= 5\""),
     ("sql replace @ -> at", "sqlite3 chinook.sqlite \"select replace(replace(Email,'@',' at '),'.',' dot ') from Customer where CustomerId <= 5\""),
@@ -68,7 +69,7 @@ def run_matrix(veil, real_values: list[str], ws: str) -> list[dict]:
         if policed.startswith("echo 'veil:"):
             rows.append({"technique": name, "command": cmd, "outcome": "blocked (command policy)", "leaks": []})
             continue
-        p = subprocess.run(["bash", "-c", policed], cwd=ws, capture_output=True, text=True, timeout=30)
+        p = subprocess.run(["bash", "-c", policed], cwd=ws, capture_output=True, text=True, errors="replace", timeout=30)
         output = (p.stdout + p.stderr)[:60000]
         body = redact_request(veil, {"model": "m", "messages": [{"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t", "content": output}]}]})
@@ -76,7 +77,10 @@ def run_matrix(veil, real_values: list[str], ws: str) -> list[dict]:
         payload = json.dumps(body, ensure_ascii=False)
         sent = body["messages"][0]["content"][0]["content"]
         leaks = find_leaks(payload, real_values)
-        part = sorted({v for n, v in partial.items() if n in sent and v not in leaks})
+        # pieces inside veil's own tokens are not leaks (a phone pseudonym is 555-01xx too)
+        pattern = veil.token_pattern()
+        bare = pattern.sub(" ", sent) if pattern else sent
+        part = sorted({v for n, v in partial.items() if n in bare and v not in leaks})
         if sent.startswith("[veil: output withheld"):
             outcome = "withheld (guard)"
         elif leaks:
