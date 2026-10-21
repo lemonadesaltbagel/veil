@@ -1,7 +1,6 @@
 """Team mode: identical pseudonyms across machines; managed-settings drop-in."""
 
 import base64
-import json
 
 import pytest
 

@@ -18,7 +18,7 @@ import json
 import re
 from typing import Any
 
-from .anthropic import PSEUDONYM_NOTICE, Policy, rehydrate_tool_input
+from .anthropic import PSEUDONYM_NOTICE, Policy
 from .engine import Veil
 from .openai import _redact_arguments, _redact_content, rehydrate_args
 from .stream import TextHold

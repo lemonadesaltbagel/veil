@@ -5,14 +5,13 @@ import base64
 import io
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
 
 import pytest
 
-from veil import mcpdb, state
+from veil import state
 from veil.detect import KnownValues
 from veil.engine import Veil
 from veil.mcpdb import Server, ToolError, open_source, prepare_sql, restore_filter

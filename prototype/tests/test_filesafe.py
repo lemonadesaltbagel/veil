@@ -7,7 +7,6 @@ import csv
 import io
 import json
 import subprocess
-import sys
 
 import pytest
 

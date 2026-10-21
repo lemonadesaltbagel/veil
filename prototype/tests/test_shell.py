@@ -1,6 +1,5 @@
 """Rehydrating real values into shell commands must never turn data into code."""
 
-import os
 import sqlite3
 import subprocess
 import sys

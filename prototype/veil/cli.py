@@ -25,7 +25,7 @@ import json
 import sys
 
 from . import state
-from .anthropic import Policy, rehydrate_tool_input
+from .anthropic import Policy
 from .sources import seed, seed_environment
 
 

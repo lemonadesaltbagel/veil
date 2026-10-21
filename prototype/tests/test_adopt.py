@@ -1,7 +1,6 @@
 """veil init / status / service plumbing (no databases needed)."""
 
 import json
-import os
 import plistlib
 import shutil
 import subprocess

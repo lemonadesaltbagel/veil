@@ -18,12 +18,11 @@ record names the field path, kind and token -- never the real value.
 from __future__ import annotations
 
 import bisect
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from .decode import b64_runs, norm, squash, strong_views, views
-from .detect import WORD, detect, encoded_forms
+from .detect import detect, encoded_forms
 from .engine import Veil
 from .match import Matcher, Prefixes
 

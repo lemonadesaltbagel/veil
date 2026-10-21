@@ -2,7 +2,6 @@
 SQL Server with native sensitivity classification and masking, Elasticsearch."""
 
 import json
-import time
 
 import httpx
 import pytest

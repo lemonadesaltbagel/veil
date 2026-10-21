@@ -26,7 +26,6 @@ from .engine import Veil
 import dataclasses
 
 from . import cloud, display, quasi
-from .state import home
 from .guard import Guard
 from .openai import ChatStreamRewriter, is_chat_path, redact_chat_request, rehydrate_chat_response
 from .responses import (ResponsesStreamRewriter, is_responses_path, redact_responses_request,

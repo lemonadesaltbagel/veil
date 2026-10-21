@@ -16,7 +16,6 @@ BigQuery   (REST; token from VEIL_BIGQUERY_TOKEN or `gcloud auth print-access-to
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from typing import Any, Callable
