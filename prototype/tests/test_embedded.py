@@ -5,16 +5,16 @@ represented safely there) -- and must never execute anything."""
 
 import shutil
 import subprocess
-
-import pytest
 import sys
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="executes POSIX shell commands (bash, interpreters); covered on macOS/Linux CI")
+import pytest
 
 from veil.anthropic import Policy, rehydrate_tool_input
 from veil.detect import KnownValues
 from veil.engine import Veil
 from veil.vault import Vault
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="executes POSIX shell commands (bash, interpreters); covered on macOS/Linux CI")
 
 HOSTILE = [
     "O'Brien",

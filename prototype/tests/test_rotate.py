@@ -5,6 +5,7 @@ import http.server
 import os
 import threading
 
+from veil.proxy import LocalHTTPServer
 import pytest
 from cryptography.exceptions import InvalidTag
 
@@ -81,7 +82,7 @@ def test_cli_refuses_while_a_proxy_runs(home, capsys):
 
         def log_message(self, *a):
             pass
-    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    srv = LocalHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
         with pytest.raises(SystemExit, match="proxy is running"):

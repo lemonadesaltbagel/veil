@@ -12,6 +12,7 @@ claude.ai logins); only hop-by-hop and encoding headers are dropped.
 from __future__ import annotations
 
 import json
+import socketserver
 import os
 import sys
 import threading
@@ -32,6 +33,16 @@ from .responses import (ResponsesStreamRewriter, is_responses_path, redact_respo
                         rehydrate_responses_body)
 
 HOP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding", "keep-alive"}
+
+
+class LocalHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse-DNS lookup in server_bind():
+    http.server calls socket.getfqdn(host), which can stall for 30 s+ on macOS
+    (mDNS). veil binds loopback only, so the name is just the address."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def _strings(node):
@@ -406,7 +417,7 @@ def serve(veil: Veil, policy: Policy, port: int = 8787, upstream: str = "https:/
           anthropic_aws_upstream: str | None = None):
     client = httpx.Client(timeout=httpx.Timeout(600, connect=10))
     observer = capture_observer(capture) if capture else None
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(veil, policy, upstream, client,
+    server = LocalHTTPServer(("127.0.0.1", port), make_handler(veil, policy, upstream, client,
                                                                    observer=observer,
                                                                    openai_upstream=openai_upstream,
                                                                    bedrock_upstream=bedrock_upstream,

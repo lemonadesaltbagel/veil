@@ -6,10 +6,10 @@ import plistlib
 import shutil
 import subprocess
 import threading
-from http.server import ThreadingHTTPServer
 
 import httpx
 
+from veil.proxy import LocalHTTPServer
 from veil import adopt
 from veil.anthropic import Policy
 from veil.detect import KnownValues
@@ -63,7 +63,7 @@ def test_settings_merge_is_idempotent_and_preserves_user_config(tmp_path):
 def test_health_endpoint_reports_counts_not_values():
     known = KnownValues(); known.add("leonekohler@surfeu.de", "email", "c")
     veil = Veil(Vault(":memory:", b"s"), known)
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(veil, Policy(), "http://127.0.0.1:9", httpx.Client()))
+    srv = LocalHTTPServer(("127.0.0.1", 0), make_handler(veil, Policy(), "http://127.0.0.1:9", httpx.Client()))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
         h = adopt.health(srv.server_port)

@@ -3,9 +3,10 @@ import os
 import re
 import sqlite3
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import httpx
+from veil.proxy import LocalHTTPServer
 import pytest
 
 from veil.anthropic import Policy, StreamRewriter, redact_request, rehydrate_response, rehydrate_tool_input
@@ -223,10 +224,10 @@ def test_proxy_end_to_end(veil):
             self.end_headers()
             self.wfile.write(data)
 
-    up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    up = LocalHTTPServer(("127.0.0.1", 0), Upstream)
     threading.Thread(target=up.serve_forever, daemon=True).start()
     client = httpx.Client(trust_env=False)
-    px = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+    px = LocalHTTPServer(("127.0.0.1", 0), make_handler(
         veil, Policy(), f"http://127.0.0.1:{up.server_port}", client, log=open(os.devnull, "w")))
     threading.Thread(target=px.serve_forever, daemon=True).start()
     try:

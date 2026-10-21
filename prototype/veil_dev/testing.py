@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
+from veil.proxy import LocalHTTPServer
 from veil.anthropic import Policy
 from veil.detect import WORD
 from veil.engine import Veil
@@ -83,7 +84,7 @@ def start_proxy(veil: Veil, upstream: str, recorder: Recorder, policy: Policy | 
                 vertex_upstream: str | None = None, foundry_upstream: str | None = None,
                 anthropic_aws_upstream: str | None = None) -> ThreadingHTTPServer:
     client = httpx.Client(trust_env=False, timeout=httpx.Timeout(300, connect=15))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+    server = LocalHTTPServer(("127.0.0.1", 0), make_handler(
         veil, policy or Policy(), upstream, client, log=log or open(os.devnull, "w"), observer=recorder,
         openai_upstream=openai_upstream or upstream, bedrock_upstream=bedrock_upstream or upstream,
         vertex_upstream=vertex_upstream or upstream, foundry_upstream=foundry_upstream or upstream,
@@ -201,7 +202,7 @@ def start_mock_llm(db_path: str = "chinook.sqlite") -> ThreadingHTTPServer:
                    "stop_reason": stop, "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}}
             self._send(200, "application/json", json.dumps(msg).encode())
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    server = LocalHTTPServer(("127.0.0.1", 0), H)
     server.requests = []  # (path, headers, raw body) as received: what an upstream would see
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -429,7 +430,7 @@ def start_mock_responses(db_path: str = "chinook.sqlite") -> ThreadingHTTPServer
             self.send_response(200); self.send_header("content-type", "text/event-stream")
             self.send_header("content-length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    server = LocalHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -472,6 +473,6 @@ def start_mock_cloud(db_path: str = "chinook.sqlite") -> ThreadingHTTPServer:
                    "stop_reason": stop, "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}}
             self._send(200, "application/json", json.dumps(msg).encode())
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    server = LocalHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

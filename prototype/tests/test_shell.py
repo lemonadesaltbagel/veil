@@ -3,16 +3,16 @@
 import os
 import sqlite3
 import subprocess
-
-import pytest
 import sys
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="executes POSIX shell commands (bash, interpreters); covered on macOS/Linux CI")
+import pytest
 
 from veil.anthropic import Policy, rehydrate_tool_input
 from veil.detect import KnownValues
 from veil.engine import Veil
 from veil.vault import Vault
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="executes POSIX shell commands (bash, interpreters); covered on macOS/Linux CI")
 
 NASTY = [
     "O'Brien",                                   # breaks SQL and single-quoted shell

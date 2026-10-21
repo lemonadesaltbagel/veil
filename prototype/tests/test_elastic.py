@@ -3,9 +3,10 @@ Kibana ecommerce sample (denormalised order events)."""
 
 import json
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
+from veil.proxy import LocalHTTPServer
 import pytest
 
 from veil.detect import KnownValues
@@ -79,7 +80,7 @@ def es():
             self._body()
             self._json({"succeeded": True})
 
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    srv = LocalHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"elasticsearch://127.0.0.1:{srv.server_port}", docs
     srv.shutdown()

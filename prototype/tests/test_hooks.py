@@ -7,9 +7,9 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import ThreadingHTTPServer
 
 import httpx
+from veil.proxy import LocalHTTPServer
 import pytest
 
 EVENT = {"tool_name": "Bash", "tool_input": {"command": "tail app.log"},
@@ -33,7 +33,7 @@ def _proxy():
     from veil import state
     from veil.anthropic import Policy
     from veil.proxy import make_handler
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state.load(), Policy(), "http://127.0.0.1:9",
+    srv = LocalHTTPServer(("127.0.0.1", 0), make_handler(state.load(), Policy(), "http://127.0.0.1:9",
                                                              httpx.Client(trust_env=False), log=open(os.devnull, "w")))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
