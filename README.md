@@ -1,6 +1,6 @@
 # veil
 
-[![TestPyPI](https://img.shields.io/badge/TestPyPI-veil--proxy%200.1.0-blue)](https://test.pypi.org/project/veil-proxy/)
+[![PyPI](https://img.shields.io/pypi/v/veil-proxy)](https://pypi.org/project/veil-proxy/)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
@@ -143,13 +143,12 @@ or `VEIL_VERTEX_TOKEN`.
 
 ## Install
 
-veil is published on **TestPyPI** as `veil-proxy`. It installs the `veil` and `veil-hook` commands.
+veil is published on **PyPI** as [`veil-proxy`](https://pypi.org/project/veil-proxy/). It installs
+the `veil` and `veil-hook` commands.
 
 ```sh
-# veil-proxy from TestPyPI, its dependencies from PyPI
-pip install --no-deps -i https://test.pypi.org/simple/ veil-proxy
-pip install httpx cryptography pyahocorasick
-# database drivers are extras: veil-proxy[postgres], [mysql], [mongo], [redis], [bedrock], [ner], [all]
+pip install veil-proxy                 # core: httpx, cryptography, pyahocorasick
+pip install "veil-proxy[postgres]"     # extras: postgres, mysql, mongo, redis, bedrock, ner, all
 ```
 
 Or from source (requires [uv](https://docs.astral.sh/uv/)):
@@ -213,6 +212,16 @@ uv run python scripts/eval_ai4privacy.py  # free-text leak rates: patterns / +NE
 
 Each audit writes a report with three files per request: what your client sent, what the model
 received, and what the model replied.
+
+## Release history
+
+| Version | Date | Where | Notes |
+|---|---|---|---|
+| 0.1.1 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.1/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.1/) | First PyPI release. The same files went to TestPyPI first as a final dry run, then to PyPI; both were verified byte-identical to the inspected build. |
+| 0.1.0 | 2026-10-20 | [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.0/) only | Packaging dry run: verified the runtime-only contents, a clean install from the index, and the console scripts. Never published to PyPI. |
+
+Every release ships only the runtime package (`veil/`). Tests, scripts, datasets and the audit
+harness stay in this repository.
 
 ## Limitations
 
