@@ -27,7 +27,7 @@ CONFIG = {"model", "tool_choice", "parallel_tool_calls", "reasoning", "store", "
           "prompt_cache_key", "max_output_tokens", "temperature", "top_p", "truncation", "service_tier",
           "previous_response_id", "text", "background", "max_tool_calls", "stream_options"}
 NO_REAL = {"write_stdin"}  # keystrokes into a running (maybe shell) session: fail safe
-PATCH_FILES = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (.+)$", re.M)
+PATCH_HEADER = re.compile(r"^(\*\*\* (?:Update|Add|Delete) File: |\*\*\* Move to: )(.+)$")
 
 
 def _redact_item(veil: Veil, it: Any) -> Any:
@@ -73,18 +73,41 @@ def redact_responses_request(veil: Veil, body: dict, notice: bool = False) -> di
 
 def _patch_input(veil: Veil, policy: Policy, text: str) -> str:
     """apply_patch freeform input: preserve semantics over the files it touches.
-    Header paths are always made real (or the patch misses its file); other tokens
-    only if their real value already exists in a touched file (no new PII in code)."""
-    tokens = veil.tokens_in(text)
-    allowed = set()
-    for path in PATCH_FILES.findall(text):
-        allowed |= veil.tokens_in(path)
-        try:
-            existing = open(veil.rehydrate(path.strip()), encoding="utf-8", errors="replace").read()
-        except OSError:
-            continue
-        allowed |= {t for t in tokens if (veil.vault.value_for(t) or "\0") in existing}
-    return veil.rehydrate(text, only=allowed)
+    Header paths and context/removed lines are locators: made real (or the patch misses).
+    Added lines get only values that already exist in that file, spelled for where they
+    land in its language (veil/filesafe.py) -- no new PII in code."""
+    from . import filesafe
+    out, section = [], None  # section: {"path", "lang", "allowed", "added": [(index in out, text)]}
+
+    def flush():
+        if not section or not section["added"]:
+            return
+        full = "\n".join(t for _, t in section["added"])  # the added block, as it will read
+        pos = 0
+        for idx, t in section["added"]:
+            out[idx] = "+" + filesafe.restore_into(veil, t, section["allowed"], section["lang"], full, pos)
+            pos += len(t) + 1
+
+    for line in text.split("\n"):
+        m = PATCH_HEADER.match(line)
+        if m:
+            flush()
+            path = veil.rehydrate(m.group(2).strip())
+            try:
+                existing = open(path, encoding="utf-8", errors="replace").read()
+            except OSError:
+                existing = ""
+            lang = filesafe.language(path)
+            allowed = {t for t in veil.tokens_in(text) if filesafe.present(veil.vault.value_for(t) or "\0", existing, lang)}
+            section = {"lang": lang, "allowed": allowed, "added": []}
+            out.append(m.group(1) + path)
+        elif section is not None and line.startswith("+"):
+            section["added"].append((len(out), line[1:]))
+            out.append(line)
+        else:
+            out.append(veil.rehydrate(line) if line.startswith((" ", "-", "@@")) else line)
+    flush()
+    return "\n".join(out)
 
 
 class ItemRehydrator:

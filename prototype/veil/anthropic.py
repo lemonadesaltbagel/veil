@@ -136,14 +136,37 @@ def rehydrate_tool_input(veil: Veil, policy: Policy, tool: str, tool_input: dict
                 existing = f.read()
         except OSError:
             existing = ""
+        # ... and each restored value is spelled for where it lands in the file's language
+        # (string literal, comment, code, YAML/CSV quoting): veil/filesafe.py
+        from . import filesafe
+        lang = "python" if tool == "NotebookEdit" else filesafe.language(path)
         allowed = {t for t in veil.tokens_in(_texts(tool_input))
-                   if (veil.vault.value_for(t) or "\0") in existing}
+                   if filesafe.present(veil.vault.value_for(t) or "\0", existing, lang)}
+
+        def edit(current: str, old_real: str, new_tok: str) -> tuple[str, str]:
+            """(new_string with values restored, the file after this edit)"""
+            i = current.find(old_real) if old_real else -1
+            if i < 0:
+                return filesafe.restore_into(veil, new_tok, allowed, lang), current
+            full = current[:i] + new_tok + current[i + len(old_real):]
+            new_real = filesafe.restore_into(veil, new_tok, allowed, lang, full, i)
+            return new_real, current[:i] + new_real + current[i + len(old_real):]
+
         for k in CONTENT_FIELDS & out.keys():
-            out[k] = veil.rehydrate_json(out[k], only=allowed)
-        if isinstance(out.get("edits"), list):  # MultiEdit
-            out["edits"] = [{**e, "old_string": veil.rehydrate(e.get("old_string", "")),
-                             "new_string": veil.rehydrate(e.get("new_string", ""), only=allowed)}
-                            for e in tool_input["edits"]]
+            v = out[k]
+            if not isinstance(v, str):
+                out[k] = veil.rehydrate_json(v, only=allowed)
+            elif k == "new_string":
+                out[k] = edit(existing, out.get("old_string") or "", v)[0]
+            else:  # Write content (the whole file), NotebookEdit new_source (the whole cell)
+                out[k] = filesafe.restore_into(veil, v, allowed, lang)
+        if isinstance(out.get("edits"), list):  # MultiEdit: applied in order
+            current, edits = existing, []
+            for e in tool_input["edits"]:
+                old_real = veil.rehydrate(e.get("old_string", ""))
+                new_real, current = edit(current, old_real, e.get("new_string", ""))
+                edits.append({**e, "old_string": old_real, "new_string": new_real})
+            out["edits"] = edits
         return out
     return tool_input
 

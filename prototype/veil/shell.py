@@ -500,13 +500,15 @@ def _stdin_lang(owner: list[Word]) -> str | None:
 # -- embedded languages ------------------------------------------------------
 
 LANG_QUOTES = {"python": "'\"", "js": "'\"`", "ruby": "'\"", "perl": "'\"", "php": "'\"",
-               "jq": '"', "awk": '"', "sql": "'\"", "mysql": "'\""}
+               "jq": '"', "awk": '"', "sql": "'\"", "mysql": "'\"", "json": '"'}
+BLOCK_COMMENT_LANGS = {"js", "php", "sql", "mysql"}
 LINE_COMMENT = {"python": "#", "ruby": "#", "perl": "#", "jq": "#", "awk": "#", "sql": "--", "mysql": "--",
                 "js": "//", "php": "//"}
 
 
-def literal_contexts(lang: str, text: str) -> list[tuple[str, str] | None]:
-    """Per character: (quote, prefix) when inside a string literal, else None."""
+def literal_contexts(lang: str, text: str, comments: bool = False) -> list[tuple[str, str] | None]:
+    """Per character: (quote, prefix) when inside a string literal, else None.
+    With comments=True, comment characters are ("#", "line") or ("/*", "block")."""
     quotes, comment = LANG_QUOTES[lang], LINE_COMMENT.get(lang)
     backslash = lang not in ("sql",)
     out: list[tuple[str, str] | None] = [None] * len(text)
@@ -515,7 +517,17 @@ def literal_contexts(lang: str, text: str) -> list[tuple[str, str] | None]:
         c = text[i]
         if comment and text.startswith(comment, i):
             j = text.find("\n", i)
-            i = n if j < 0 else j
+            j = n if j < 0 else j
+            if comments:
+                out[i:j] = [("#", "line")] * (j - i)
+            i = j
+            continue
+        if lang in BLOCK_COMMENT_LANGS and text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            if comments:
+                out[i:j] = [("/*", "block")] * (j - i)
+            i = j
             continue
         if c in quotes:
             q = c * 3 if lang == "python" and text.startswith(c * 3, i) else c
@@ -556,7 +568,7 @@ def escape_literal(value: str, lang: str, quote: str, prefix: str) -> str | None
             return value.replace("\\", "\\\\").replace("'", "\\'")
         special = {"ruby": '\\"#', "perl": '\\"$@', "php": '\\"$'}[lang]
         return "".join("\\" + ch if ch in special else ch for ch in value).replace("\n", "\\n")
-    if lang == "jq":
+    if lang in ("jq", "json"):
         return json.dumps(value, ensure_ascii=False)[1:-1]
     if lang == "awk":
         return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
