@@ -59,6 +59,8 @@ def _init(veil, args) -> int:
             print(f"  skipped {adopt.redact_uri(src)}: {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
     seed_environment(veil.known)
     state.save_known(veil.known, veil.vault.cipher)
+    if sources:
+        state.remember_sources([src for src, _ in sources], veil.vault.cipher)
     path = adopt.write_claude_settings(project, args.port, hooks=not args.no_hooks, deny_env=args.deny_env)
     print(f"  wrote   {os.path.relpath(path, project)} (ANTHROPIC_BASE_URL=http://127.0.0.1:{args.port})",
           file=sys.stderr)
@@ -163,7 +165,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     p = argparse.ArgumentParser(prog="veil")
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("seed"); s.add_argument("sources", nargs="+")
+    s = sub.add_parser("seed"); s.add_argument("sources", nargs="*")
+    s.add_argument("--no-remember", action="store_true", help="don't re-seed this source automatically")
+    s.add_argument("--refresh", action="store_true", help="re-seed every remembered source now")
+    s = sub.add_parser("sources"); s.add_argument("action", nargs="?", choices=["list", "remove"], default="list")
+    s.add_argument("which", nargs="?", help="index (from `veil sources`) or the source itself")
     s = sub.add_parser("seed-sqlite"); s.add_argument("path")  # back-compat alias
     sub.add_parser("seed-env")
     sub.add_parser("redact"); sub.add_parser("rehydrate")
@@ -178,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--openai-upstream", metavar="URL",
                    help="OpenAI-format upstream for /chat/completions (e.g. https://api.deepseek.com)")
     s.add_argument("--bedrock-upstream", metavar="URL", help="e.g. https://bedrock-runtime.us-east-1.amazonaws.com")
+    s.add_argument("--reseed-interval", type=float, default=30,
+                   help="seconds between change checks of remembered sources (0 = off)")
     s.add_argument("--vertex-upstream", metavar="URL", help="e.g. https://us-east5-aiplatform.googleapis.com")
     s = sub.add_parser("hook"); s.add_argument("kind", choices=["pre", "post"])
     s = sub.add_parser("init"); s.add_argument("project", nargs="?", default=".")
@@ -217,12 +225,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         return _status(veil, args)
     if args.cmd in ("seed", "seed-sqlite"):
-        for source in (args.sources if args.cmd == "seed" else [args.path]):
+        from .adopt import redact_uri
+        given = (args.sources if args.cmd == "seed" else [args.path])
+        todo = given + (state.load_sources(veil.vault.cipher) if getattr(args, "refresh", False) else [])
+        if not todo:
+            raise SystemExit("usage: veil seed SOURCE... | veil seed --refresh")
+        for source in dict.fromkeys(todo):
             report = seed(veil.known, source)
-            print(f"# {source.split('@')[-1]}", file=sys.stderr)  # never echo credentials
+            print(f"# {redact_uri(source) if '://' in source else source}", file=sys.stderr)  # never echo credentials
             print(report.table(), file=sys.stderr)
         state.save_known(veil.known, veil.vault.cipher)
+        if given and not getattr(args, "no_remember", False):
+            n = len(state.remember_sources(given, veil.vault.cipher))
+            print(f"{n} source(s) remembered: the proxy re-seeds them when they change", file=sys.stderr)
         print(f"{len(veil.known)} known values in total", file=sys.stderr)
+    elif args.cmd == "sources":
+        from .adopt import redact_uri
+        current = state.load_sources(veil.vault.cipher)
+        if args.action == "remove":
+            if args.which is None:
+                raise SystemExit("usage: veil sources remove INDEX|SOURCE")
+            drop = current[int(args.which)] if args.which.isdigit() and int(args.which) < len(current) else args.which
+            current = [c for c in current if c != drop]
+            state.save_sources(current, veil.vault.cipher)
+        for i, src in enumerate(current):
+            print(f"{i}  {redact_uri(src) if '://' in src else src}")
+        if not current:
+            print("(no remembered sources: `veil seed SOURCE` adds one)")
     elif args.cmd == "seed-env":
         found = seed_environment(veil.known)
         state.save_known(veil.known, veil.vault.cipher)
@@ -241,6 +270,14 @@ def main(argv: list[str] | None = None) -> int:
             veil.ner = GlinerDetector()
         server = serve(veil, Policy(display_real=not args.show_tokens), args.port, args.upstream, args.capture,
                        args.openai_upstream, args.bedrock_upstream, args.vertex_upstream)
+        sources = state.load_sources(veil.vault.cipher)
+        if sources and args.reseed_interval > 0:
+            from .reseed import Reseeder
+            veil.reseeder = Reseeder(veil, sources, interval=args.reseed_interval,
+                                     save=lambda known: state.save_known(known, veil.vault.cipher))
+            veil.reseeder.start()
+            print(f"[veil] re-seeding {len(sources)} source(s) on change (checked every {args.reseed_interval:g}s)",
+                  file=sys.stderr)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

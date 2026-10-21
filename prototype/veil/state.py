@@ -76,3 +76,30 @@ def save_known(known: KnownValues, cipher=None) -> None:
     cipher = cipher or Cipher(_key_material(h)[0])
     rows = [[v, k, g] for v, (k, g) in known._entries.items()]
     _private_write(os.path.join(h, "known.enc"), cipher.seal(json.dumps(rows), "known"))
+
+
+# -- remembered seed sources (encrypted: database URLs can carry passwords) --------------
+
+def load_sources(cipher=None) -> list[str]:
+    from .crypto import Cipher
+    path = os.path.join(home(), "sources.enc")
+    if not os.path.exists(path):
+        return []
+    cipher = cipher or Cipher(_key_material(home())[0])
+    return json.loads(cipher.open(open(path, "rb").read(), "sources"))
+
+
+def save_sources(sources: list[str], cipher=None) -> None:
+    from .crypto import Cipher
+    cipher = cipher or Cipher(_key_material(home())[0])
+    _private_write(os.path.join(home(), "sources.enc"), cipher.seal(json.dumps(sources), "sources"))
+
+
+def remember_sources(new: list[str], cipher=None) -> list[str]:
+    import os.path as p
+    norm = [s if "://" in s else p.abspath(s) for s in new]
+    current = load_sources(cipher)
+    merged = current + [s for s in norm if s not in current]
+    if merged != current:
+        save_sources(merged, cipher)
+    return merged

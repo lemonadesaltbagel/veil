@@ -143,6 +143,12 @@ class KnownValues:
                 self.add(local, "username", group)
         self._pattern = None
 
+    def copy(self) -> "KnownValues":
+        """Cheap copy (no re-derivation) for build-then-swap updates."""
+        new = KnownValues(self.min_len)
+        new._entries, new._aliases, new._emails_ci = dict(self._entries), dict(self._aliases), dict(self._emails_ci)
+        return new
+
     def group_of(self, s: str) -> str | None:
         value = self.canonical(s.strip())
         return self._entries[value][1] if value else None

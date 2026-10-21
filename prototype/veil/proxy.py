@@ -104,6 +104,8 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                     return
                 body = json.dumps({"ok": True, "upstream": upstream, "known_values": len(veil.known),
                                    "display": display.resolve(self.headers, home(), not policy.display_real),
+                                   "sources": len(getattr(getattr(veil, "reseeder", None), "sources", [])),
+                                   "reseed_passes": getattr(getattr(veil, "reseeder", None), "runs", 0),
                                    "tokens": len(veil.vault.tokens()), "ner": veil.ner is not None}).encode()
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
