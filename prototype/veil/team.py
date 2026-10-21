@@ -54,10 +54,13 @@ def import_bundle(bundle: str, passphrase: str | None = None) -> tuple[bytes, li
     return base64.b64decode(data["token_secret"]), list(data.get("allow", []))
 
 
-def managed_settings(port: int, hooks: bool = True, lock_hooks: bool = False) -> dict:
+def managed_settings(port: int, hooks: bool = True, lock_hooks: bool = False, display: str | None = None) -> dict:
     url = f"http://127.0.0.1:{port}"
     doc: dict = {"env": {"ANTHROPIC_BASE_URL": url, "NO_PROXY": "127.0.0.1,localhost"},
                  "allowedProviders": ["customEndpoint"]}
+    if display == "tokens":
+        # the proxy honours this header per request and it can't be loosened locally
+        doc["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-veil-display: tokens"
     if hooks:
         doc["hooks"] = {event: [{"matcher": "*", "hooks": [{"type": "command",
                                                             "command": f"veil-hook {kind} --port {port}"}]}]

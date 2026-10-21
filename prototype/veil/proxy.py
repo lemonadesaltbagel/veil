@@ -22,7 +22,10 @@ import httpx
 
 from .anthropic import Policy, StreamRewriter, redact_request, rehydrate_response
 from .engine import Veil
-from . import cloud
+import dataclasses
+
+from . import cloud, display
+from .state import home
 from .guard import Guard
 from .openai import ChatStreamRewriter, is_chat_path, redact_chat_request, rehydrate_chat_response
 from .responses import (ResponsesStreamRewriter, is_responses_path, redact_responses_request,
@@ -100,6 +103,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                 if not self._local_only():
                     return
                 body = json.dumps({"ok": True, "upstream": upstream, "known_values": len(veil.known),
+                                   "display": display.resolve(self.headers, home(), not policy.display_real),
                                    "tokens": len(veil.vault.tokens()), "ner": veil.ner is not None}).encode()
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
@@ -127,6 +131,11 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                     observer(exch)
 
         def _exchange(self, raw: bytes | None, exch: dict):
+            # display mode is resolved per request: `veil display tokens` and the managed
+            # x-veil-display header take effect immediately (see veil/display.py)
+            mode = display.resolve(self.headers, home(), forced_tokens=not policy.display_real)
+            self.pol = dataclasses.replace(policy, display_real=mode == "real")
+            exch["display"] = mode
             path = self.path
             api = "anthropic" if path.split("?")[0].startswith("/v1/messages") else \
                 ("chat" if is_chat_path(path) else ("responses" if is_responses_path(path) else cloud.route(path)))
@@ -148,7 +157,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                     before = veil.vault.version
                     body = {"anthropic": redact_request, "chat": redact_chat_request,
                             "responses": redact_responses_request, "bedrock": redact_request,
-                            "vertex": redact_request}[api](veil, body, notice=policy.notice)
+                            "vertex": redact_request}[api](veil, body, notice=self.pol.notice)
                     with guard_lock:
                         body, findings = guard.enforce(body)
                     exch["findings"] = [f.__dict__ for f in findings]
@@ -172,7 +181,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                                          for f in reversed(traceback.extract_tb(e.__traceback__)))
                     print(f"[veil] redaction error {type(e).__name__} at {frames}", file=log)
                     return self._fail(502, f"veil could not redact request: {type(e).__name__}")
-            headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
+            headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != display.HEADER}
             headers["accept-encoding"] = "identity"
             url = (target or upstream).rstrip("/") + path
             if api == "bedrock" or (api is None and target == bedrock_upstream and bedrock_upstream):
@@ -207,7 +216,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                         rehydrate = {"anthropic": rehydrate_response, "bedrock": rehydrate_response,
                                      "vertex": rehydrate_response, "chat": rehydrate_chat_response,
                                      "responses": rehydrate_responses_body}[api]
-                        data = json.dumps(rehydrate(veil, policy, exch["model_view"]),
+                        data = json.dumps(rehydrate(veil, self.pol, exch["model_view"]),
                                           ensure_ascii=False).encode()
                     elif resp.status_code != 200:
                         exch["model_view"] = {"error": data.decode(errors="replace")[:2000]}
@@ -224,7 +233,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
 
         def _relay_eventstream(self, resp: httpx.Response) -> dict:
             """Bedrock: decode binary frames, rewrite the Anthropic event inside, re-encode with new CRCs."""
-            rw = StreamRewriter(veil, policy)
+            rw = StreamRewriter(veil, self.pol)
             decoder = cloud.FrameDecoder()
             view: dict = {"content": [], "usage": {}, "stop_reason": None, "model": None}
             for data in resp.iter_bytes():
@@ -241,7 +250,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
 
         def _relay_responses_sse(self, resp: httpx.Response) -> dict:
             """Responses API stream: `event: <type>` + `data: {json}` frames."""
-            rw = ResponsesStreamRewriter(veil, policy)
+            rw = ResponsesStreamRewriter(veil, self.pol)
             event, datas = None, []
             for line in resp.iter_lines():
                 if line.startswith("event:"):
@@ -264,7 +273,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
 
         def _relay_chat_sse(self, resp: httpx.Response) -> dict:
             """OpenAI chat stream: `data: {chunk}` ... `data: [DONE]`."""
-            rw = ChatStreamRewriter(veil, policy)
+            rw = ChatStreamRewriter(veil, self.pol)
             for line in resp.iter_lines():
                 if not line.startswith("data:"):
                     if line.startswith(":"):  # SSE comment / keep-alive
@@ -286,7 +295,7 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
 
         def _relay_sse(self, resp: httpx.Response) -> dict:
             """Relay + rewrite the stream; returns the model's own (tokenized) message."""
-            rw = StreamRewriter(veil, policy)
+            rw = StreamRewriter(veil, self.pol)
             view: dict = {"content": [], "usage": {}, "stop_reason": None, "model": None}
             event, datas = None, []
             for line in resp.iter_lines():

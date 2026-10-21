@@ -5,6 +5,9 @@
   veil seed-env                    learn the developer's own identity (OS user, git author)
   veil redact  < file              print the LLM's view of a file
   veil rehydrate < file            map tokens back to real values
+  veil display [real|tokens]       what you see in answers (default real; tokens for screen shares)
+  veil reveal [FILE]               pseudonyms -> real values (alias of rehydrate)
+  veil share [FILE]                real values -> pseudonyms, safe to paste into tickets/chat
   veil proxy [--port 8787]         run the ANTHROPIC_BASE_URL proxy
   veil hook pre|post               Claude Code PreToolUse/PostToolUse hook
   veil audit [--driver ...]        run an agent session through veil, report what the LLM received
@@ -72,6 +75,8 @@ def _status(veil, args) -> int:
     h = adopt.health(args.port)
     print(f"proxy    {'up ' + json.dumps(h) if h else 'DOWN on :' + str(args.port)}")
     print(f"service  {adopt.systemd_status() if sys.platform.startswith('linux') else adopt.service_status()}")
+    from . import display
+    print(f"display  {display.configured_mode(state.home())} (answers show {'real values' if display.configured_mode(state.home()) == 'real' else 'pseudonyms'})")
     print(f"keys     {'env' if os.environ.get('VEIL_VAULT_KEY') else 'keychain/file'}; vault {len(veil.vault.tokens())} tokens, "
           f"{len(veil.known)} known values")
     path = os.path.join(os.path.abspath(args.project), ".claude", "settings.local.json")
@@ -114,7 +119,8 @@ def _team(args) -> int:
         state.save_config(cfg)
         print(f"allowlist: {cfg['allow']}", file=sys.stderr)
     else:
-        doc = team.managed_settings(args.port, hooks=not args.no_hooks, lock_hooks=args.lock_hooks)
+        doc = team.managed_settings(args.port, hooks=not args.no_hooks, lock_hooks=args.lock_hooks,
+                                    display=args.display)
         with open(args.out, "w") as f:
             json.dump(doc, f, indent=2)
             f.write("\n")
@@ -161,6 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("seed-sqlite"); s.add_argument("path")  # back-compat alias
     sub.add_parser("seed-env")
     sub.add_parser("redact"); sub.add_parser("rehydrate")
+    s = sub.add_parser("display"); s.add_argument("mode", nargs="?", choices=["real", "tokens"])
+    for name in ("reveal", "share"):
+        s = sub.add_parser(name); s.add_argument("file", nargs="?", default="-")
     s = sub.add_parser("proxy"); s.add_argument("--port", type=int, default=8787)
     s.add_argument("--upstream", default="https://api.anthropic.com")
     s.add_argument("--show-tokens", action="store_true", help="don't rehydrate assistant text")
@@ -181,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("value", nargs="*"); s.add_argument("--passphrase-env", metavar="VAR")
     s.add_argument("--reset-vault", action="store_true"); s.add_argument("--port", type=int, default=8787)
     s.add_argument("--no-hooks", action="store_true"); s.add_argument("--lock-hooks", action="store_true")
+    s.add_argument("--display", choices=["real", "tokens"], help="managed-settings: enforce pseudonyms in answers")
     s.add_argument("--out", default="50-veil.json")
     s = sub.add_parser("service"); s.add_argument("action", choices=["install", "uninstall", "status"])
     s.add_argument("--port", type=int, default=8787); s.add_argument("--upstream", default="https://api.anthropic.com")
@@ -189,6 +199,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "service":
         return _service(args)
+    if args.cmd == "display":
+        from . import display
+        if args.mode:
+            cfg = state.config(); cfg["display"] = args.mode; state.save_config(cfg)
+        mode = display.configured_mode(state.home())
+        print(f"display: {mode}" + ("  (VEIL_DISPLAY overrides config)" if __import__("os").environ.get("VEIL_DISPLAY") else "")
+              + ("\nnote: a managed `x-veil-display: tokens` header still forces pseudonyms" if mode == "real" else ""))
+        return 0
     if args.cmd == "team":
         return _team(args)
     if args.cmd == "init" and args.dry_run:
@@ -209,6 +227,9 @@ def main(argv: list[str] | None = None) -> int:
         found = seed_environment(veil.known)
         state.save_known(veil.known, veil.vault.cipher)
         print(f"{len(found)} identity values learned", file=sys.stderr)
+    elif args.cmd in ("reveal", "share"):
+        text = sys.stdin.read() if args.file == "-" else open(args.file, encoding="utf-8").read()
+        sys.stdout.write(veil.rehydrate(text) if args.cmd == "reveal" else veil.redact(text, free_text=True))
     elif args.cmd == "redact":
         sys.stdout.write(veil.redact(sys.stdin.read()))
     elif args.cmd == "rehydrate":
