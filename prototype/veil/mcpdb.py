@@ -144,7 +144,8 @@ class SQLSource:
             self._deadline = deadline
         elif u.scheme in ("postgres", "postgresql"):
             import psycopg
-            self.conn = psycopg.connect(uri, autocommit=True)
+            self.conn = psycopg.connect(uri, autocommit=True,
+                                        **({} if "connect_timeout" in uri else {"connect_timeout": 10}))
             self.conn.execute("SET default_transaction_read_only = on")
             self.conn.execute("SET statement_timeout = '30s'")
             self.kind, self.paramstyle = "postgres", "format"
@@ -152,7 +153,8 @@ class SQLSource:
             import pymysql
             self.conn = pymysql.connect(host=u.hostname or "127.0.0.1", port=u.port or 3306,
                                         user=unquote(u.username or "root"), password=unquote(u.password or ""),
-                                        database=u.path.lstrip("/"), autocommit=True, charset="utf8mb4")
+                                        database=u.path.lstrip("/"), autocommit=True, charset="utf8mb4",
+                                        connect_timeout=10)
             with self.conn.cursor() as c:
                 c.execute("SET SESSION TRANSACTION READ ONLY")
             self.kind, self.paramstyle = "mysql", "format"

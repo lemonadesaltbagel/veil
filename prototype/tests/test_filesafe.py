@@ -37,7 +37,7 @@ def test_python_literals_comments_and_fstrings(veil, tmp_path, value):
     f.write_text(f"OWNER = {value!r}\n# TODO\nx = 1\n")              # the value exists (escaped) in the file
     tok = veil.redact(value)
     out = _edit(veil, f, "# TODO\nx = 1\n", f"# TODO\nA = '{tok}'\nB = \"{tok}\"\nC = f'{{x}} {tok}'\n# by {tok}\nx = 1\n")
-    new = f.read_text().replace("# TODO\nx = 1\n", out["new_string"])
+    new = f.read_text(encoding="utf-8").replace("# TODO\nx = 1\n", out["new_string"])
     tree = ast.parse(new)                                            # still valid Python
     ns = {"x": 1}
     exec(compile(tree, "people.py", "exec"), ns)
@@ -96,7 +96,7 @@ def test_shell_script_uses_command_escaping(veil, tmp_path):
     f.write_text("#!/bin/sh\n# owner: O'Brien\n", encoding="utf-8")
     tok = veil.redact("O'Brien")
     out = _edit(veil, f, "# owner: O'Brien\n", f"# owner: O'Brien\nprintf '%s' '{tok}'\n")
-    script = f.read_text().replace("# owner: O'Brien\n", out["new_string"])
+    script = f.read_text(encoding="utf-8").replace("# owner: O'Brien\n", out["new_string"])
     assert subprocess.run(["sh", "-c", script], capture_output=True, text=True).stdout == "O'Brien"
 
 

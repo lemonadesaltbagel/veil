@@ -140,7 +140,8 @@ def seed_postgres(known: KnownValues, dsn: str, max_rows: int = 500_000, delta: 
     from psycopg import sql
     from psycopg.rows import dict_row
 
-    conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
+    conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
+                           **({} if "connect_timeout" in dsn else {"connect_timeout": 10}))
     conn.execute("SET default_transaction_read_only = on")
     conn.execute("SET statement_timeout = '60s'")
     tables: dict[tuple[str, str], dict[str, dict]] = {}
@@ -206,7 +207,7 @@ def seed_mysql(known: KnownValues, host: str, user: str, password: str, database
     import pymysql
 
     conn = pymysql.connect(host=host, port=port, user=user, password=password, database=database,
-                           cursorclass=pymysql.cursors.DictCursor, charset="utf8mb4")
+                           cursorclass=pymysql.cursors.DictCursor, charset="utf8mb4", connect_timeout=10)
     with conn.cursor() as cur:
         cur.execute("SET SESSION TRANSACTION READ ONLY")
         cur.execute("""SELECT TABLE_NAME t, COLUMN_NAME c, DATA_TYPE d, COLUMN_KEY k, COLUMN_COMMENT m
