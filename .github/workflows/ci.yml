@@ -121,6 +121,7 @@ jobs:
           - {os: ubuntu-latest, python: "3.11"}
           - {os: windows-latest, python: "3.12"}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

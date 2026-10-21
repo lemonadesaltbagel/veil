@@ -5,6 +5,9 @@ import sqlite3
 import subprocess
 
 import pytest
+import sys
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="executes POSIX shell commands (bash, interpreters); covered on macOS/Linux CI")
 
 from veil.anthropic import Policy, rehydrate_tool_input
 from veil.detect import KnownValues
