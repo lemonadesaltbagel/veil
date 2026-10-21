@@ -289,6 +289,21 @@ Database seeding details: see `docs/DATABASES.md`.
   - Per-project hooks did not carry their vault home. A hook rejected by the project's proxy fell
     back to the *default* vault.
 
+- **Platforms.** According to Claude Code's docs, Microsoft Foundry and Claude Platform on AWS
+  both speak plain Anthropic Messages + SSE at `{base}/v1/messages`.
+  - Foundry authenticates with an API key or an Entra bearer token; neither covers the body, so
+    both pass through veil unchanged.
+  - Claude Platform on AWS adds the `anthropic-workspace-id` header and either a workspace key or
+    SigV4. The skip-auth flag (`CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH`) lets a gateway sign. The SigV4
+    service name is not documented.
+  - Real Claude Code 2.1.285 in both modes, through veil to a scripted model: 0 leaks.
+- **New data shapes** (SQL Server catalogs, Elasticsearch ecommerce events, Northwind-style
+  columns) surfaced five classification bugs, listed in `docs/DATABASES.md`. The worst: `ShipAddress`
+  was excluded as an IP-address column, so shipping addresses were never seeded.
+- **Linux CI found that the dictionary-word filter depended on `/usr/share/dict/words`**, which
+  Linux runners and Windows lack. There, first names like `Code` were seeded and rewrote "Claude
+  Code". veil now ships the list.
+
 ## 13. Known limitations (honest list)
 
 - `write_stdin` (Codex interactive sessions) never receives real values, so interactive tools (e.g. a

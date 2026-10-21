@@ -136,6 +136,9 @@ class Vault:
         self.version += 1
         return token
 
+    def close(self) -> None:
+        self._db.close()
+
     def retire_all(self, drop: bool = False) -> int:
         """Stop issuing the current tokens (a new token secret follows). Kept for
         rehydration unless `drop`. Returns how many tokens were affected."""

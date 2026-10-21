@@ -8,6 +8,8 @@ All connections are read-only; only text-like columns are ever selected.
 from __future__ import annotations
 
 import ipaddress
+import os
+import pathlib
 import sqlite3
 import uuid
 from typing import Any, Callable, Iterable
@@ -45,7 +47,7 @@ def run(known: KnownValues, containers: list[Container],
 # -- SQLite -------------------------------------------------------------------
 
 def seed_sqlite(known: KnownValues, path: str, max_rows: int = 500_000) -> Report:
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = sqlite3.connect(pathlib.Path(os.path.abspath(path)).as_uri() + "?mode=ro", uri=True)  # Windows-safe URI
     db.row_factory = sqlite3.Row
     q = lambda s: '"' + s.replace('"', '""') + '"'
     keys: dict[str, str] = {}

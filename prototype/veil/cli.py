@@ -120,13 +120,15 @@ def _keys(args) -> int:
         pass
     h = state.home()
     if args.token_secret:
-        r = rotate.rotate_token_secret(h, state.load().vault, drop_old=args.drop_old)
+        vault = state.load().vault
+        r = rotate.rotate_token_secret(h, vault, drop_old=args.drop_old)
+        vault.close()
         print(f"token secret rotated: new pseudonyms from now on; "
               + (f"{r['dropped']} old pseudonyms forgotten" if args.drop_old else
                  f"{r['retired']} old pseudonyms retired (still restored in existing conversations)")
               + ". Teams: `veil team export` again and have everyone join.")
     else:
-        state.load()  # finishes an interrupted rotation, checks the current key works
+        state.load().vault.close()  # finishes an interrupted rotation, checks the current key works
         r = rotate.rotate_vault_key(h)
         print(f"vault key rotated: re-encrypted {r['vault_rows']} vault rows, {r['retired']} retired, "
               f"{r['files']} files; pseudonyms unchanged")

@@ -2,8 +2,8 @@
 
 vault-key (at-rest encryption; pseudonyms unchanged):
   1. a new key is stored as `vault-key-next` (so a crash can never lose it);
-  2. vault.db, known.enc and sources.enc are re-encrypted into new files, each
-     row read with whichever key opens it, and swapped in;
+  2. vault.db is re-encrypted in place (one transaction, then VACUUM), known.enc and
+     sources.enc into new files swapped in; each row is read with whichever key opens it;
   3. the new key becomes `vault-key`; `vault-key-next` is deleted.
   `state.load()` finishes an interrupted rotation (step 2 is idempotent).
 
@@ -42,34 +42,26 @@ def reencrypt(home: str, read_keys: list[bytes], write_key: bytes) -> dict:
     counts = {"vault_rows": 0, "retired": 0, "files": 0}
     vault = os.path.join(home, "vault.db")
     if os.path.exists(vault):
-        src = sqlite3.connect(vault)
-        src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        src.executescript(SCHEMA)
-        tmp = vault + ".rotating"
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT, 0o600)
-        os.close(fd)
-        dst = sqlite3.connect(tmp)
-        dst.executescript(SCHEMA)
-        for kind, blob, token, grp in src.execute("SELECT kind, value, token, grp FROM entities_v2 ORDER BY rowid"):
-            value = _open_any(readers, blob, token)
-            group = _open_any(readers, grp, token + "|grp") if grp is not None else None
-            dst.execute("INSERT INTO entities_v2 (kind, vkey, value, token, grp) VALUES (?, ?, ?, ?, ?)",
-                        (kind, w.lookup(kind, value), w.seal(value, token), token,
-                         w.seal(group, token + "|grp") if group is not None else None))
-            counts["vault_rows"] += 1
-        for token, blob in src.execute("SELECT token, value FROM retired"):
-            dst.execute("INSERT INTO retired (token, value) VALUES (?, ?)",
-                        (token, w.seal(_open_any(readers, blob, token), token)))
-            counts["retired"] += 1
-        dst.commit()
-        dst.close()
-        src.close()
-        os.replace(tmp, vault)
-        for side in ("-wal", "-shm"):
-            if os.path.exists(vault + side):
-                os.remove(vault + side)
+        # In place, in one transaction: atomic, works while the file is open (Windows can't
+        # replace an open file), and idempotent. secure_delete + VACUUM leave no pages of
+        # old-key ciphertext behind (the old key may be why we rotate).
+        db = sqlite3.connect(vault)
+        db.execute("PRAGMA secure_delete = ON")
+        db.executescript(SCHEMA)
+        with db:
+            for kind, blob, token, grp in db.execute("SELECT kind, value, token, grp FROM entities_v2").fetchall():
+                value = _open_any(readers, blob, token)
+                group = _open_any(readers, grp, token + "|grp") if grp is not None else None
+                db.execute("UPDATE entities_v2 SET vkey = ?, value = ?, grp = ? WHERE token = ?",
+                           (w.lookup(kind, value), w.seal(value, token),
+                            w.seal(group, token + "|grp") if group is not None else None, token))
+                counts["vault_rows"] += 1
+            for token, blob in db.execute("SELECT token, value FROM retired").fetchall():
+                db.execute("UPDATE retired SET value = ? WHERE token = ?", (w.seal(_open_any(readers, blob, token), token), token))
+                counts["retired"] += 1
+        db.execute("VACUUM")
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        db.close()
     for name, aad in (("known.enc", "known"), ("sources.enc", "sources")):
         path = os.path.join(home, name)
         if os.path.exists(path):

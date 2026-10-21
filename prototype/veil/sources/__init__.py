@@ -47,8 +47,8 @@ def seed(known: KnownValues, uri: str) -> Report:
         return seed_redis(known, uri)
     if u.scheme in ("mongodb", "mongodb+srv"):
         return seed_mongo(known, uri, u.path.lstrip("/") or "test")
-    if u.scheme in ("", "sqlite", "file"):
-        path = u.path if u.scheme else uri
+    if u.scheme in ("", "sqlite", "file") or len(u.scheme) == 1:  # C:\data\app.db: a drive, not a scheme
+        path = u.path if u.scheme in ("sqlite", "file") else uri
         if os.path.isdir(path) or not path.endswith((".db", ".sqlite", ".sqlite3")):
             return seed_files(known, [path])
         return seed_sqlite(known, path)

@@ -31,7 +31,13 @@ def home(tmp_path, monkeypatch):
 def test_vault_key_rotation_keeps_pseudonyms(home):
     h, tok = home
     old = peek_key("vault-key", h)
+    import sqlite3
+    con = sqlite3.connect(os.path.join(h, "vault.db"))
+    old_blobs = [b for (b,) in con.execute("SELECT value FROM entities_v2")]
+    con.close()
     r = rotate.rotate_vault_key(h)
+    raw = open(os.path.join(h, "vault.db"), "rb").read()
+    assert old_blobs and not any(b in raw for b in old_blobs)   # no old-key ciphertext left in free pages
     assert r == {"vault_rows": 1, "retired": 0, "files": 2}
     new = peek_key("vault-key", h)
     assert new != old and peek_key("vault-key-next", h) is None

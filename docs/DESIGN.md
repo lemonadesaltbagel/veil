@@ -211,6 +211,20 @@ against botocore's decoder; real Claude Code parses it). Auth: clients skip thei
 a client SigV4 signature covers the body veil must change. Bedrock: `AWS_BEARER_TOKEN_BEDROCK` or SigV4
 (botocore default credential chain); Vertex: `VEIL_VERTEX_TOKEN` or `gcloud auth print-access-token`.
 
+**Microsoft Foundry and Claude Platform on AWS** carry plain Anthropic Messages under a path prefix:
+`ANTHROPIC_FOUNDRY_BASE_URL=…/foundry` and `ANTHROPIC_AWS_BASE_URL=…/anthropic-aws`. veil strips the
+prefix and forwards to `--foundry-upstream` / `--anthropic-aws-upstream`.
+
+- Credentials that don't cover the body pass through: Foundry `x-api-key` and Entra bearer tokens,
+  and the AWS workspace `x-api-key`.
+- With the client's skip-auth flag, veil adds them itself: `ANTHROPIC_FOUNDRY_API_KEY` or an `az`
+  token for Foundry, or a SigV4 signature over the *redacted* body for AWS. The service name comes
+  from the host (`aws-external-anthropic`), since it is undocumented, and can be overridden.
+- `anthropic-workspace-id` is forwarded unchanged.
+
+Verified with real Claude Code 2.1.285 in both modes through veil (0 leaks, `veil audit --provider
+foundry|anthropic-aws`).
+
 ## Teams
 
 - `veil team export|join`: bundle = token secret + allowlist (scrypt + AES-GCM under a passphrase);
@@ -314,6 +328,18 @@ systemd user unit (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-
 `ReadWritePaths=$VEIL_HOME`, 0600) and enables it with `systemctl --user`. Verified in a Debian
 container: pip-installed wheel, GNOME Keyring via `dbus-run-session`, `systemd-analyze verify`.
 
+## Windows
+
+- **Keys** live in the Windows Credential Manager (ctypes `CredWriteW`/`CredReadW`, targets
+  `veil:<name>`).
+- **`veil service install`** writes a VBScript launcher to the user's Startup folder and starts the
+  proxy at once, hidden and without admin rights (a scheduled task at logon usually needs them).
+  `--pid-file` lets `uninstall` stop it. Keys from the environment are never written into the
+  launcher.
+- **Hook commands** quote interpreter paths with backslashes, because Git Bash would eat them.
+
+The test suite runs on `windows-latest` in CI.
+
 ## Packaging
 
 Distribution `veil-proxy` on PyPI. Core deps: httpx, cryptography, pyahocorasick. Extras: `postgres`,
@@ -356,8 +382,8 @@ system prompt, and fails open on schema mismatch → backup only.
 1c. **Seeders** (SQLite, Postgres, MySQL/MariaDB, MongoDB, Redis, fixture files, env), native labels,
     pg_anonymizer dictionary, FK/value grouping, fragment handling, optional NER, escape/byte-dump defence. ✅
     See `docs/DATABASES.md`.
-2. Seeders still to do: SQL Server (native classifications), schema-from-code (ORM types), Elasticsearch,
-   DynamoDB key segments, warehouses; `git log` authors. ✅ continuous re-seeding (2026-10-21).
+2. ✅ SQL Server (native classifications), schema-from-code, Elasticsearch, continuous re-seeding
+   (2026-10-21). Still to do: DynamoDB key segments, warehouses, `git log` authors.
 3. ✅ Leak harnesses: `veil audit` (canary scenario, real agents, offline), bypass matrix
    (`veil_dev.redteam`), pilot on a real repository (`veil_dev.pilot`), CI with live databases.
 4. ✅ done (see 1d). ✅ Per-project vaults, key rotation (2026-10-21). Still open: team secret distribution
@@ -368,8 +394,9 @@ system prompt, and fails open on schema mismatch → backup only.
 7. ✅ `veil init` / `status` / `service`; ✅ team mode, managed-settings drop-in, Linux (systemd + Secret
    Service), Bedrock/Vertex, fast hooks, packaging (2026-10-20).
 8. ✅ Released: `veil-proxy` 0.1.1 / 0.1.2 on PyPI, Homebrew tap. ✅ Display modes, re-seeding, pilot,
-   CI, scale to 1M values (2026-10-21). Open: Windows (Credential Manager, scheduled task), Microsoft
-   Foundry / Claude Platform on AWS formats, real-cloud runs (needs AWS/GCP accounts).
+   CI, scale to 1M values, Windows, Microsoft Foundry / Claude Platform on AWS, SQL Server and
+   Elasticsearch seeders, schema hints from code (2026-10-21). Open: real-cloud runs (needs
+   AWS/GCP/Azure accounts), DynamoDB and warehouse seeders.
 
 ## Open questions
 

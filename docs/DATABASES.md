@@ -18,6 +18,9 @@ with patterns + NER, 1.8% when the people are seeded** (`captures/ai4privacy/REP
 | Redis | `SCAN` + `TYPE`; containers = key patterns (`user:42` → `user:{id}`) | hashes, JSON strings, sets/lists | key; sessions/sets join people by value | redis-developer user-database (6k hashes) + JSON sessions + a set |
 | Fixture files | dirs/files: JSON, JSONL, CSV, Django fixtures, mongoexport (extended JSON, JSONL-in-.json) | yes | `id`/`pk`/`_id` | tests |
 | Environment | OS user, home dir name, git author | — | `env:developer` | — |
+| SQL Server | `sys.columns`, `MS_Description`, **`sys.sensitivity_classifications`** (information type → kind), **`sys.masked_columns`** (`email()` → email) | text columns; birth dates | PK; FKs from `sys.foreign_key_columns` | fake DB-API connection serving the catalog queries (no server here) |
+| Elasticsearch / OpenSearch | `_mapping` (nested objects as paths), field `meta` (`{"pii": "email"}`), random-score sampling, scroll | objects | `customer_id` / `user_id` when present (denormalised events), else `_id` | fake REST server shaped like Kibana's ecommerce sample |
+| Code (no data) | Prisma (`/// @pii`, `/// @encrypted`, `@map`), Django (`EmailField`, `GenericIPAddressField`, `PhoneNumberField`), Rails (`encrypts`, `filter_attributes`, `schema.rb` comments), SQLAlchemy (`EmailType`…), OpenAPI (`format: email`, `x-pii`), protobuf (`debug_redact`) | — | hints applied to every source whose table/collection matches the model | synthetic project |
 
 `veil seed postgresql://… mysql://… redis://… mongodb://… app.db fixtures/` seeds them all; one run over
 the four local test stores learned 28,914 values.
@@ -60,8 +63,25 @@ the four local test stores learned 28,914 values.
 | Neo4j / InfluxDB | `db.schema.nodeTypeProperties()` / `SHOW TAG KEYS` | node properties / tags (`user`, `client_ip`) | — |
 | Code (no DB) | Prisma, Django, Rails `schema.rb`, SQLAlchemy, Mongoose, GraphQL, OpenAPI, protobuf | names + types | Rails `encrypts`/`filter_attributes`, Lockbox, `prisma-field-encryption` `/// @encrypted`, protobuf `debug_redact`, OpenAPI `format: email`, Django `EmailField` |
 
-Recommended next order: SQL Server (free native classification) → schema-from-code (ORM types as a
-signal for the fixture seeder) → Elasticsearch → DynamoDB (key-segment splitting) → warehouses.
+Done since: SQL Server, schema-from-code, Elasticsearch (2026-10-21). Next: DynamoDB (key-segment
+splitting) → warehouses (Snowflake/BigQuery native tags).
+
+### Quasi-identifiers and direct identifiers (2026-10-21)
+Person records also yield birth dates, postal codes, cities, companies and job titles (`qi:*`), each
+with the number of records sharing it. Only rare values (< 5 records) are reported or pseudonymised
+(`veil quasi`). Columns for SSNs, passports, national or tax IDs, licences and IBANs are `id_number`
+and always pseudonymised.
+
+### Classification fixes from new data shapes
+- **camelCase columns** are classified via snake_case. `ShipAddress` used to be excluded as an IP
+  address (`Sh·ip·Address`).
+- **`pii:ipv4` comment tags** lost their digit (`[a-z_]+`), so the kind was dropped.
+- **Person-prefixed names** are recognized: `customer_full_name`, `billing_first_name`,
+  `ContactName`. `product_name` still isn't.
+- **`city_name`** is recognized as a city, and a bare **`user`** handle next to an email is a
+  username.
+- **A column tagged plain `pii`** with no other recognisable kind used to be dropped; it is now
+  seeded as an opaque value.
 
 ### Pitfalls to keep in mind
 Partition children and views double-count; generated columns are copies; audit/history and

@@ -88,5 +88,5 @@ def test_per_project_home_reaches_the_hooks(tmp_path, monkeypatch):
     p = make_project(tmp_path)
     s = json.load(open(adopt.write_claude_settings(str(p), 8788)))
     cmd = s["hooks"]["PreToolUse"][-1]["hooks"][0]["command"]
-    assert cmd.endswith(f"pre --port 8788 --home {tmp_path / 'veil-acme'}")
+    assert cmd.endswith(f"pre --port 8788 --home {adopt._q(str(tmp_path / 'veil-acme'))}")
     assert s["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8788"

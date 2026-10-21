@@ -160,12 +160,26 @@ One proxy serves all of them, routed by path:
 | Claude Code, Claude Agent SDK | Anthropic Messages | `veil init` (or `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`) |
 | Claude Code on Amazon Bedrock | Bedrock InvokeModel (binary event stream) | `CLAUDE_CODE_USE_BEDROCK=1`, `ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:8787`, `CLAUDE_CODE_SKIP_BEDROCK_AUTH=1` |
 | Claude Code on Google Vertex | Vertex rawPredict | `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:8787/v1`, `CLAUDE_CODE_SKIP_VERTEX_AUTH=1` |
+| Claude Code on Microsoft Foundry | Anthropic Messages | `CLAUDE_CODE_USE_FOUNDRY=1`, `ANTHROPIC_FOUNDRY_BASE_URL=http://127.0.0.1:8787/foundry` (proxy: `--foundry-upstream https://RESOURCE.services.ai.azure.com/anthropic`) |
+| Claude Code on Claude Platform on AWS | Anthropic Messages | `CLAUDE_CODE_USE_ANTHROPIC_AWS=1`, `ANTHROPIC_AWS_BASE_URL=http://127.0.0.1:8787/anthropic-aws`, `ANTHROPIC_AWS_WORKSPACE_ID=…` (proxy: `--anthropic-aws-upstream https://aws-external-anthropic.REGION.api.aws`) |
 | Codex CLI | OpenAI Responses | provider with `base_url = "http://127.0.0.1:8787/v1"`, `wire_api = "responses"` |
 | Aider, Continue, OpenAI SDK, LiteLLM | OpenAI Chat Completions | `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` |
 
 For Bedrock and Vertex, the client skips its own auth and veil signs requests *after* redacting
 them. Bedrock uses `AWS_BEARER_TOKEN_BEDROCK` or SigV4 (`veil-proxy[bedrock]`); Vertex uses `gcloud`
 or `VEIL_VERTEX_TOKEN`.
+
+- **Microsoft Foundry:** API keys and Entra tokens don't cover the body, so the client's own
+  credentials pass through. With `CLAUDE_CODE_SKIP_FOUNDRY_AUTH=1`, veil adds
+  `ANTHROPIC_FOUNDRY_API_KEY` or an `az` token.
+- **Claude Platform on AWS:** a workspace API key passes through. For SigV4, set
+  `CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH=1` and veil signs after redaction. The SigV4 service name is
+  taken from the host and isn't documented; override it with `VEIL_ANTHROPIC_AWS_SIGV4_SERVICE` if
+  needed.
+
+Every row has been exercised end to end with a real client (Claude Code 2.1.285, Codex CLI, or the
+OpenAI SDK) through veil against a faithful fake upstream, with 0 leaks. None of the cloud rows has
+been run against a live cloud account yet.
 
 ## Install
 
@@ -174,8 +188,12 @@ the `veil` and `veil-hook` commands.
 
 ```sh
 pip install veil-proxy                 # core: httpx, cryptography, pyahocorasick
-pip install "veil-proxy[postgres]"     # extras: postgres, mysql, mongo, redis, bedrock, ner, all
+pip install "veil-proxy[postgres]"     # extras: postgres, mysql, mongo, redis, bedrock, ner, mssql, all
 ```
+
+Windows: `pip install veil-proxy`. Keys are kept in the Windows Credential Manager, and
+`veil service install` adds a launcher to your Startup folder (no admin rights needed). The test
+suite runs on Windows in CI.
 
 Or with Homebrew (macOS/Linux):
 
@@ -207,7 +225,8 @@ they change:
 
 ```sh
 veil seed postgresql://user@localhost/app mysql://root@localhost/app redis://localhost:6379/0 \
-          mongodb://localhost:27017/app ./fixtures
+          mongodb://localhost:27017/app mssql://user:pw@localhost/app elasticsearch://localhost:9200 ./fixtures
+veil seed --schema ~/code/myapp   # personal fields declared in code: Prisma, Django, Rails, SQLAlchemy, OpenAPI, protobuf
 veil sources                  # list remembered sources (credentials masked); `veil sources remove N`
 ```
 
