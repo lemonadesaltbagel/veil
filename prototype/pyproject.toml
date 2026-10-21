@@ -1,6 +1,6 @@
 [project]
 name = "veil-proxy"
-version = "0.1.0"
+version = "0.1.1"
 description = "Privacy middleware for AI coding agents: the model sees consistent pseudonyms, your machine keeps the real values"
 readme = "README.md"
 requires-python = ">=3.11"

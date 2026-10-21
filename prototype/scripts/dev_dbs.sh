@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local test databases for tests/test_sources.py (all bound to 127.0.0.1, data in .run/ or a container).
 #   scripts/dev_dbs.sh start | stop | status
-# Postgres: Docker image postgres:17 on :55432 (Chinook + datasets/pg_app_schema.sql)
+# Postgres: Homebrew postgresql@17 on :55432 (Docker postgres:17 as fallback) (Chinook + datasets/pg_app_schema.sql)
 # MariaDB : Homebrew `mariadb` on :53306        (Chinook + datasets/mysql_app_schema.sql)
 # Redis   : Homebrew `redis` on :56379          (datasets/redis_users.redis + sessions)
 # MongoDB : Homebrew `mongodb-community` on :57017 (datasets/mflix: users, sessions, comments)
@@ -10,11 +10,21 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"; RUN="$HERE/../.run"; DS="$HERE/dataset
 mkdir -p "$RUN"
 
 start() {
-  docker rm -f veil-pg >/dev/null 2>&1 || true
-  docker run -d --name veil-pg -e POSTGRES_PASSWORD=veil -p 127.0.0.1:55432:5432 postgres:17 >/dev/null
-  until docker exec veil-pg pg_isready -U postgres -q; do sleep 1; done; sleep 1
-  docker exec -i veil-pg psql -q -U postgres < "$DS/Chinook_PostgreSql.sql" >/dev/null 2>&1
-  docker exec -i veil-pg psql -q -U postgres < "$DS/pg_app_schema.sql" >/dev/null 2>&1
+  PGBIN=$(ls -d /opt/homebrew/opt/postgresql@17/bin /usr/local/opt/postgresql@17/bin 2>/dev/null | head -1 || true)
+  if [ -n "$PGBIN" ]; then
+    if [ ! -d "$RUN/pg" ]; then
+      "$PGBIN/initdb" -D "$RUN/pg" -U postgres --auth=trust >/dev/null
+    fi
+    "$PGBIN/pg_ctl" -D "$RUN/pg" -o "-p 55432 -k $RUN -c listen_addresses=127.0.0.1" -l "$RUN/pg.log" -w start >/dev/null
+    PSQL=("$PGBIN/psql" -q -h 127.0.0.1 -p 55432 -U postgres)
+  else
+    docker rm -f veil-pg >/dev/null 2>&1 || true
+    docker run -d --name veil-pg -e POSTGRES_PASSWORD=veil -p 127.0.0.1:55432:5432 postgres:17 >/dev/null
+    until docker exec veil-pg pg_isready -U postgres -q; do sleep 1; done; sleep 1
+    PSQL=(docker exec -i veil-pg psql -q -U postgres)
+  fi
+  "${PSQL[@]}" < "$DS/Chinook_PostgreSql.sql" >/dev/null 2>&1
+  "${PSQL[@]}" < "$DS/pg_app_schema.sql" >/dev/null 2>&1
 
   if [ ! -d "$RUN/mariadb" ]; then
     mariadb-install-db --datadir="$RUN/mariadb" --auth-root-authentication-method=normal --skip-test-db >/dev/null
@@ -41,6 +51,8 @@ start() {
 }
 
 stop() {
+  PGBIN=$(ls -d /opt/homebrew/opt/postgresql@17/bin /usr/local/opt/postgresql@17/bin 2>/dev/null | head -1 || true)
+  [ -n "$PGBIN" ] && [ -d "$RUN/pg" ] && "$PGBIN/pg_ctl" -D "$RUN/pg" -m fast stop >/dev/null 2>&1 || true
   docker rm -f veil-pg >/dev/null 2>&1 || true
   [ -f "$RUN/mariadb.pid" ] && kill "$(cat "$RUN/mariadb.pid")" 2>/dev/null || true
   redis-cli -p 56379 shutdown nosave >/dev/null 2>&1 || true
@@ -49,7 +61,9 @@ stop() {
 }
 
 status() {
-  docker ps --filter name=veil-pg --format 'postgres: {{.Status}}' | grep . || echo "postgres: down"
+  (psql -h 127.0.0.1 -p 55432 -U postgres -tAc "select 1" >/dev/null 2>&1 || \
+   /opt/homebrew/opt/postgresql@17/bin/psql -h 127.0.0.1 -p 55432 -U postgres -tAc "select 1" >/dev/null 2>&1) \
+    && echo "postgres: up" || echo "postgres: down"
   mariadb --no-defaults -h127.0.0.1 -P53306 -uroot -e "select 1" >/dev/null 2>&1 && echo "mariadb: up" || echo "mariadb: down"
   redis-cli -p 56379 ping 2>/dev/null | grep -q PONG && echo "redis: up" || echo "redis: down"
   mongosh --quiet --port 57017 --eval "db.runCommand({ping:1}).ok" >/dev/null 2>&1 && echo "mongodb: up" || echo "mongodb: down"
