@@ -29,6 +29,8 @@ LABEL = os.environ.get("VEIL_SERVICE_LABEL", "dev.veil.proxy")
 def detect_sources(project: str) -> list[tuple[str, str]]:
     """[(source, where it was found)] -- credentials stay in the source string, never printed."""
     found: dict[str, str] = {}
+    if os.path.isdir(os.path.join(project, ".git")):
+        found["git:" + os.path.abspath(project)] = ".git (commit authors)"
     for root, dirs, files in os.walk(project):
         dirs[:] = [d for d in dirs if d not in SKIP]
         depth = root[len(project):].count(os.sep)

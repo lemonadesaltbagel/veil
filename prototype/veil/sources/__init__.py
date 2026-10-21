@@ -37,6 +37,18 @@ def seed(known: KnownValues, uri: str) -> Report:
     if u.scheme in ("mysql", "mariadb"):
         return seed_mysql(known, u.hostname or "127.0.0.1", unquote(u.username or "root"),
                           unquote(u.password or ""), u.path.lstrip("/"), u.port or 3306)
+    if u.scheme == "snowflake":
+        from .warehouse import seed_snowflake
+        return seed_snowflake(known, uri)
+    if u.scheme == "bigquery":
+        from .warehouse import seed_bigquery
+        return seed_bigquery(known, uri)
+    if u.scheme == "dynamodb":
+        from .dynamo import seed_dynamodb
+        return seed_dynamodb(known, uri)
+    if u.scheme == "git":
+        from .git import seed_git
+        return seed_git(known, uri[4:] or ".")
     if u.scheme.split("+")[0] in ("elasticsearch", "opensearch", "es"):
         from .elastic import seed_elasticsearch
         return seed_elasticsearch(known, uri)

@@ -23,10 +23,13 @@ import gc
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
 from urllib.parse import unquote, urlparse
+
+import httpx
 
 from .guard import seeded_index
 from .sources import seed
@@ -70,6 +73,41 @@ def fingerprint(source: str) -> str:
                 return _digest("mysql", cur.fetchone())
         finally:
             c.close()
+    if u.scheme == "snowflake":
+        from .sources.warehouse import _snowflake_connect
+        c = _snowflake_connect(source)
+        try:
+            cur = c.cursor()
+            cur.execute("SELECT SUM(row_count), MAX(last_altered), COUNT(*) FROM information_schema.tables "
+                        "WHERE table_schema <> 'INFORMATION_SCHEMA'")
+            return _digest("snowflake", cur.fetchone())
+        finally:
+            c.close()
+    if u.scheme == "bigquery":
+        from .sources.warehouse import API, _bq_token
+        project, datasets = u.hostname, [d for d in u.path.strip("/").split(",") if d]
+        with httpx.Client(base_url=API, headers={"authorization": f"Bearer {_bq_token()}"}, timeout=60) as bq:
+            if not datasets:
+                datasets = [d["datasetReference"]["datasetId"]
+                            for d in bq.get(f"/projects/{project}/datasets").json().get("datasets", [])]
+            meta = []
+            for ds in datasets:
+                for t in bq.get(f"/projects/{project}/datasets/{ds}/tables").json().get("tables", []):
+                    tid = t["tableReference"]["tableId"]
+                    info = bq.get(f"/projects/{project}/datasets/{ds}/tables/{tid}").json()
+                    meta.append((ds, tid, info.get("numRows"), info.get("lastModifiedTime")))
+        return _digest("bigquery", meta)
+    if u.scheme == "dynamodb":  # counts refresh every ~6 h; the hourly full re-seed covers the rest
+        from .sources.dynamo import _client
+        ddb, tables = _client(source)
+        if not tables:
+            tables = ddb.list_tables()["TableNames"]
+        return _digest("dynamodb", [(t, ddb.describe_table(TableName=t)["Table"].get("ItemCount"),
+                                     ddb.describe_table(TableName=t)["Table"].get("TableSizeBytes")) for t in tables])
+    if u.scheme == "git":
+        refs = subprocess.run(["git", "-C", source[4:] or ".", "for-each-ref", "--format=%(objectname)"],
+                              capture_output=True, text=True, timeout=30).stdout
+        return _digest("git", refs)
     if u.scheme.split("+")[0] in ("elasticsearch", "opensearch", "es"):
         from .sources.elastic import _client
         es, indices = _client(source)

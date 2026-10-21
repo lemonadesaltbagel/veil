@@ -212,6 +212,7 @@ def classify_quasi(path: str) -> str | None:
 
 def snake(word: str) -> str:
     """ShipAddress -> ship_address, IPAddress -> ip_address, postalCode -> postal_code."""
+    word = re.sub(r"[:#\-\s]+", "_", word)  # PK:EMAIL (key segments), contact-email
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", word).lower()
 
 
