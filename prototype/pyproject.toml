@@ -1,0 +1,61 @@
+[project]
+name = "veil-proxy"
+version = "0.1.0"
+description = "Privacy middleware for AI coding agents: the model sees consistent pseudonyms, your machine keeps the real values"
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["privacy", "pii", "llm", "proxy", "pseudonymization", "claude-code", "coding-agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = [
+    "cryptography>=50.0.2",
+    "httpx>=0.27",
+    "pyahocorasick>=2.3.1",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.3.6"]
+mysql = ["pymysql>=1.2.3"]
+mongo = ["pymongo>=4.19.0"]
+redis = ["redis>=8.1.0"]
+bedrock = ["botocore>=1.43.115"]
+ner = ["gliner>=0.2.29", "onnxruntime>=1.31.0"]
+all = ["veil-proxy[postgres,mysql,mongo,redis,bedrock]"]
+
+[project.scripts]
+veil = "veil.cli:main"
+veil-hook = "veil.hookclient:cli"
+
+[dependency-groups]
+dev = [
+    "anthropic>=1.15.0",
+    "botocore>=1.43.115",
+    "mongomock>=4.3.0",
+    "openai>=3.35.1",
+    "pytest>=8",
+    "veil-proxy[all]",
+]
+
+[tool.uv.sources]
+veil-proxy = { workspace = true }
+
+# Ship only the runtime package. Not shipped: tests, scripts, datasets, captures, models, and the
+# dev-only harness modules (audit/testing/redteam need the sample datasets from a source checkout).
+[tool.uv.build-backend]
+module-name = "veil"
+module-root = ""
+source-include = ["README.md"]
+source-exclude = ["tests", "scripts", "datasets", "captures", "models", "packaging", "demo", "dist",
+                  "veil/testing.py", "veil/audit.py", "veil/redteam.py", "**/__pycache__", "**/.DS_Store"]
+wheel-exclude = ["veil/testing.py", "veil/audit.py", "veil/redteam.py", "**/__pycache__", "**/.DS_Store"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
