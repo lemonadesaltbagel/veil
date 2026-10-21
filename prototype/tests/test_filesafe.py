@@ -34,7 +34,7 @@ def _edit(veil, path, old, new):
 @pytest.mark.parametrize("value", VALUES)
 def test_python_literals_comments_and_fstrings(veil, tmp_path, value):
     f = tmp_path / "people.py"
-    f.write_text(f"OWNER = {value!r}\n# TODO\nx = 1\n")              # the value exists (escaped) in the file
+    f.write_text(f"OWNER = {value!r}\n# TODO\nx = 1\n", encoding="utf-8")  # the value exists (escaped) in the file
     tok = veil.redact(value)
     out = _edit(veil, f, "# TODO\nx = 1\n", f"# TODO\nA = '{tok}'\nB = \"{tok}\"\nC = f'{{x}} {tok}'\n# by {tok}\nx = 1\n")
     new = f.read_text(encoding="utf-8").replace("# TODO\nx = 1\n", out["new_string"])
