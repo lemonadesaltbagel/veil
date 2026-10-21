@@ -120,6 +120,18 @@ def model_turn(body: dict, db_path: str = "chinook.sqlite") -> list[dict]:
     if not emails:
         return [{"type": "text", "text": "Which customer should I look at?"}]
     email = emails[-1]
+    mcp_query = next((t for t in sorted(tools) if t and t.startswith("mcp__") and t.endswith("__query")), None)
+    if mcp_query and not results:  # a database tool: the pseudonym goes in a string literal
+        sql = ("SELECT c.FirstName, c.LastName, c.Email, c.Phone, i.InvoiceId, i.Total, i.BillingAddress "
+               f"FROM Customer c JOIN Invoice i USING (CustomerId) WHERE c.Email = '{email}' "
+               "ORDER BY i.InvoiceDate DESC LIMIT 3")
+        return [{"type": "text", "text": f"Let me query the database for {email}."},
+                {"type": "tool_use", "id": "toolu_mock_mcp", "name": mcp_query, "input": {"sql": sql}}]
+    if mcp_query:
+        last = _text_of(results[-1].get("content"))
+        rows = [l for l in last.splitlines()[1:] if email in l]
+        return [{"type": "text", "text": f"Summary for {email}: {len(rows)} invoice row(s) from the database.\n"
+                 + "\n".join(rows)}]
     if not results and "Bash" in tools:
         cmd = (f"sqlite3 -header {db_path} \"select c.FirstName, c.LastName, c.Email, c.Phone, "
                f"i.InvoiceId, i.InvoiceDate, i.Total, i.BillingAddress from Customer c join Invoice i "

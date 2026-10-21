@@ -57,6 +57,30 @@ def _learn_schema(project: str, save: bool = True) -> dict:
     return hints
 
 
+DB_SCHEMES = ("postgres", "postgresql", "mysql", "mariadb", "mssql", "sqlserver", "mongodb", "mongodb+srv")
+
+
+def _register_mcp(project: str, remembered: list[str], new: list[str]) -> None:
+    import os
+    import shutil
+    import subprocess
+    from urllib.parse import urlparse
+    from .adopt import redact_uri, veil_command
+    dbs = [src for src in new if urlparse(src).scheme in DB_SCHEMES or src.endswith((".db", ".sqlite", ".sqlite3"))]
+    for n, src in enumerate(dbs):
+        name = "veil-db" if n == 0 else f"veil-db-{n + 1}"
+        index = remembered.index(src if "://" in src else os.path.abspath(src))
+        cmd = ["claude", "mcp", "add", name, "--scope", "local", "-e", f"VEIL_HOME={state.home()}", "--",
+               *veil_command(), "mcp-db", "--source", str(index)]
+        where = redact_uri(src) if "://" in src else os.path.relpath(src, project)
+        if shutil.which("claude"):
+            r = subprocess.run(cmd, cwd=project, capture_output=True, text=True)
+            ok = r.returncode == 0 or "already exists" in (r.stdout + r.stderr)
+            print(f"  mcp     {name} -> {where}" + ("" if ok else f"  (failed: {r.stderr.strip()[:120]})"), file=sys.stderr)
+        else:
+            print(f"  mcp     run in {project}: {' '.join(cmd)}", file=sys.stderr)
+
+
 def _init(veil, args) -> int:
     import os
     from . import adopt
@@ -82,7 +106,9 @@ def _init(veil, args) -> int:
     seed_environment(veil.known)
     state.save_known(veil.known, veil.vault.cipher)
     if sources:
-        state.remember_sources([src for src, _ in sources], veil.vault.cipher)
+        remembered = state.remember_sources([src for src, _ in sources], veil.vault.cipher)
+        if getattr(args, "mcp", False):
+            _register_mcp(project, remembered, [src for src, _ in sources])
     path = adopt.write_claude_settings(project, args.port, hooks=not args.no_hooks, deny_env=args.deny_env)
     print(f"  wrote   {os.path.relpath(path, project)} (ANTHROPIC_BASE_URL=http://127.0.0.1:{args.port})",
           file=sys.stderr)
@@ -239,6 +265,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("seed-env")
     sub.add_parser("redact"); sub.add_parser("rehydrate")
     s = sub.add_parser("display"); s.add_argument("mode", nargs="?", choices=["real", "tokens"])
+    s = sub.add_parser("mcp-db", help="read-only database tool for the agent (MCP stdio server)")
+    s.add_argument("uri", nargs="?", help="database URL or SQLite path")
+    s.add_argument("--source", type=int, metavar="N", help="a remembered source (veil sources), so no credentials "
+                   "appear in the MCP config")
     s = sub.add_parser("keys", help="rotate the vault key (re-encrypt) or the token secret (new pseudonyms)")
     s.add_argument("action", choices=["rotate"])
     s.add_argument("--token-secret", action="store_true", help="new pseudonyms instead of a new vault key")
@@ -270,6 +300,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--no-detect", action="store_true"); s.add_argument("--no-hooks", action="store_true")
     s.add_argument("--deny-env", action="store_true", help="also deny Claude Code reading .env files")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--mcp", action="store_true", help="register `veil mcp-db` with Claude Code for each database "
+                   "(local scope: never committed; sources by number: no credentials in the config)")
     s = sub.add_parser("status"); s.add_argument("project", nargs="?", default="."); s.add_argument("--port", type=int, default=8787)
     s = sub.add_parser("team"); s.add_argument("action", choices=["export", "join", "allow", "managed-settings"])
     s.add_argument("value", nargs="*"); s.add_argument("--passphrase-env", metavar="VAR")
@@ -294,6 +326,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "keys":
         return _keys(args)
+    if args.cmd == "mcp-db":
+        from . import mcpdb
+        veil = state.load()
+        if args.source is not None:  # same numbering as `veil sources`
+            sources = state.load_sources(veil.vault.cipher)
+            if not 0 <= args.source < len(sources):
+                raise SystemExit(f"no remembered source {args.source} (see `veil sources`)")
+            uri = sources[args.source]
+        elif args.uri:
+            uri = args.uri
+        else:
+            raise SystemExit("usage: veil mcp-db URI | veil mcp-db --source N")
+        mcpdb.Server(veil, mcpdb.open_source(uri)).serve()
+        return 0
     if args.cmd == "quasi":
         from . import quasi
         if args.mode:
