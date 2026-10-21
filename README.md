@@ -80,8 +80,15 @@ are restored. Of 35 shell/SQL injection tests, **23 fail without this protection
 it**. A fuzzer has executed **50,000** randomly nested commands with hostile values: **0 ran any code**.
 
 **5. It never writes new PII into your code.** Edit and write tools only get back values that already
-exist in the target file. Web tools, unknown tools and network-capable commands (`curl`, `ssh`,
-`git push`) never receive real values, which shuts the door on prompt-injected exfiltration.
+exist in the target file, and each one is escaped for where it lands: a Python f-string, a JS
+template literal, a JSON or YAML value, a CSV field, a shell script. Web tools, unknown tools and
+network-capable commands (`curl`, `ssh`, `git push`) never receive real values, which shuts the door
+on prompt-injected exfiltration.
+
+**A database tool with nothing to escape.** `veil mcp-db` gives the agent read-only SQL and MongoDB
+access as an MCP tool. Pseudonyms in the query become **bound parameters**, so real values are never
+SQL text. Writes are refused, and results come back pseudonymised. A real Claude Code session found
+the right rows by pseudonym, with 0 leaks.
 
 **6. It fails closed.** If redaction errors, the request is refused (HTTP 502); raw data is never
 forwarded as a fallback. A second, independent guard scans the exact outgoing bytes (plain, encoded,
@@ -109,8 +116,9 @@ request. Re-seeding happens in the background; at 1.2M values the first request 
 
 **10. It knows what else identifies people.** Birth dates, postal codes, cities, companies and job
 titles of your seeded people are tracked with how many records share them. Rare ones reaching the
-model are reported (kinds and counts only), or pseudonymised with `veil quasi redact`. SSNs, IBANs
-(checksum-validated), passports and tax IDs are always pseudonymised.
+model are reported (kinds and counts only), or pseudonymised with `veil quasi redact`. The same
+goes for rare *combinations* of common values: a city and a job title that only one person shares.
+SSNs, IBANs (checksum-validated), passports and tax IDs are always pseudonymised.
 
 **11. Proven on a real repository.** Setup: veil's own repository, 39,650 seeded values, Claude Code
 with a live model through veil. Task: add a feature and run the tests. The task succeeded, 0 real
@@ -188,7 +196,7 @@ the `veil` and `veil-hook` commands.
 
 ```sh
 pip install veil-proxy                 # core: httpx, cryptography, pyahocorasick
-pip install "veil-proxy[postgres]"     # extras: postgres, mysql, mongo, redis, bedrock, ner, mssql, all
+pip install "veil-proxy[postgres]"     # extras: postgres, mysql, mongo, redis, bedrock, ner, mssql, snowflake, all
 ```
 
 Windows: `pip install veil-proxy`. Keys are kept in the Windows Credential Manager, and
@@ -226,7 +234,9 @@ they change:
 ```sh
 veil seed postgresql://user@localhost/app mysql://root@localhost/app redis://localhost:6379/0 \
           mongodb://localhost:27017/app mssql://user:pw@localhost/app elasticsearch://localhost:9200 ./fixtures
+veil seed dynamodb://us-east-1 snowflake://user:pw@acct/DB bigquery://my-project git:.
 veil seed --schema ~/code/myapp   # personal fields declared in code: Prisma, Django, Rails, SQLAlchemy, OpenAPI, protobuf
+veil init ~/code/myapp --mcp      # also give Claude Code the read-only database tool (veil mcp-db)
 veil sources                  # list remembered sources (credentials masked); `veil sources remove N`
 ```
 
@@ -255,6 +265,8 @@ veil team export --passphrase-env TEAM_PW         # pseudonym secret + allowlist
 veil team join <bundle> --passphrase-env TEAM_PW  # identical pseudonyms on every machine
 veil team managed-settings --port 8787            # managed-settings.d/ drop-in that forces Claude Code through veil
 veil team managed-settings --display tokens       # ...and keeps pseudonyms on every screen too
+veil team export --to aws-sm://veil/team          # or op://, gcp-sm://, vault://: the manager controls access
+veil team join --from aws-sm://veil/team          # teammates; `veil team sync` follows a rotation
 ```
 
 The managed-settings file pins the proxy address and sets `allowedProviders: ["customEndpoint"]`, so
@@ -281,6 +293,8 @@ uv run veil audit --upstream https://api.deepseek.com/anthropic --api-key-env DE
 uv run python -m veil_dev.redteam         # the 21-technique bypass matrix
 uv run python -m veil_dev.scale           # a million seeded values: build time, memory, latency
 uv run python -m veil_dev.pilot --repo ~/code/myapp --task "..." --seed ... --upstream ... --out DIR
+uv run python -m veil_dev.mcp_e2e         # real Claude Code + veil mcp-db: queried by pseudonym, 0 leaks
+uv run python -m veil_dev.shellfuzz --cases 10000   # executes fuzzed commands; any code execution fails
 uv run python scripts/eval_ai4privacy.py  # free-text leak rates: patterns / +NER / seeded
 ```
 
@@ -291,6 +305,7 @@ received, and what the model replied.
 
 | Version | Date | Where | Notes |
 |---|---|---|---|
+| main | unreleased | this repository | Database tool for the agent (`veil mcp-db`, bound parameters), values escaped for the file they're written into, rare combinations of quasi-identifiers, git/DynamoDB/Snowflake/BigQuery sources, live SQL Server/Elasticsearch/DynamoDB in CI, delta re-seeding and grown indexes, team secrets via secrets managers. |
 | 0.2.1 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.2.1/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.2.1/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Bug fix: the proxy's local HTTP server no longer does a reverse-DNS lookup of 127.0.0.1 when it starts. On some Macs (mDNS) that lookup stalls for 30 s or more, delaying `veil proxy` startup; it also caused intermittent CI hangs. |
 | 0.2.0 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.2.0/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.2.0/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Display modes (`veil display`, `reveal`, `share`, team-enforced pseudonyms), automatic re-seeding, scale to 1M+ seeded values, escaping for embedded languages (fuzzed), quasi-identifiers and direct identifiers, key rotation, per-project vaults, byte-cut truncation, CI with live databases. |
 | 0.1.2 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.2/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.2/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Same code as 0.1.1, built with a pure-Python backend (`flit_core`) so the source archive builds without a Rust toolchain; that is what Homebrew needs. The dev harness moved out of the package into `veil_dev/`. Verified with `brew install --build-from-source`, `brew test` and `brew audit --strict`. |
@@ -315,11 +330,11 @@ veil is alpha software. We'd rather you know exactly where its edges are:
   the full name still is.
 - **Free text about third parties** needs the optional NER model (`veil-proxy[ner]`, then
   `veil ner-model fetch`).
-- **Re-identification.** Rare birth dates, postal codes, cities, companies and job titles are reported
-  or pseudonymised. Other attributes (amounts, timestamps, free-text descriptions) and combinations
-  of common values can still allow re-identification.
-- **Code in unknown languages.** Values are escaped for sh, heredocs and the common interpreters.
-  A value written into a script file and run later gets no escaping beyond its file context.
+- **Re-identification.** Rare quasi-identifiers, and rare combinations of them on one line, are
+  reported or pseudonymised. Combinations spread over several lines aren't, nor are exact amounts and
+  timestamps; those identify someone only together with your database, which stays local.
+- **Code in unknown languages.** Values are escaped for sh, heredocs, the common interpreters and the
+  common file types. Anything else gets the value as is; prefer `veil mcp-db` for database access.
 - **Cloud providers:** Bedrock and Vertex are verified with the real Claude Code CLI against faithful
   fake upstreams, not yet against live AWS or GCP accounts.
 

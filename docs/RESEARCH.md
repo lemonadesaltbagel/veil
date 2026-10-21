@@ -304,7 +304,32 @@ Database seeding details: see `docs/DATABASES.md`.
   Linux runners and Windows lack. There, first names like `Code` were seeded and rewrote "Claude
   Code". veil now ships the list.
 
-## 13. Known limitations (honest list)
+## 13. Closing the remaining gaps (2026-10-21, after 0.2.1)
+
+- **Database tool with bound parameters** (`veil mcp-db`). Real Claude Code through veil queried a
+  customer by pseudonym. The real email was bound as a parameter, 3 invoices were found, the model
+  saw only pseudonyms (2 requests, 0 leaks), and the developer saw real values. Building it found
+  two gaps:
+  - `PRAGMA writable_schema = 1` passed a first-keyword check. PRAGMA is now restricted to its
+    schema-reading forms.
+  - A literal holding only *part* of a pseudonym (`'%ab12%'`) passed untouched. It is now refused.
+- **Values written into files** are escaped for the file's language at their landing spot. Each
+  test result is parsed or executed.
+- **Rare combinations of common values** (city + job title of one person) are detected by set
+  intersection on demand.
+- **New sources:** git history, DynamoDB (key segments), Snowflake and BigQuery (native tags).
+  **Live servers in CI:** SQL Server with sensitivity classification and masking, Elasticsearch,
+  DynamoDB Local.
+- **Bugs found on the way:**
+  - `Veil(vault, known)` replaced a value set holding only quasi-identifiers with an empty one,
+    because `known or KnownValues()` treated it as falsy.
+  - On Windows, git output decoded with cp1252 garbled non-ASCII author names.
+  - Snowflake tag names arrive fully qualified (`SNOWFLAKE.CORE.SEMANTIC_CATEGORY`).
+  - `detect()`'s overlap check was quadratic.
+- **Team secrets** move through 1Password, AWS/GCP secret managers or Vault, and `team sync`
+  follows a rotation.
+
+## 14. Known limitations (honest list)
 
 - `write_stdin` (Codex interactive sessions) never receives real values, so interactive tools (e.g. a
   `sqlite3` REPL) see pseudonyms; non-interactive commands are unaffected.
@@ -318,13 +343,14 @@ Database seeding details: see `docs/DATABASES.md`.
 - Fragments of pseudonyms (LIKE/grep on part of a token) can't match real data. A Bash command
   containing one is replaced with a notice naming the whole tokens; a Grep pattern is expanded to that
   person's real values. A fragment assembled inside a script is not caught.
-- Shell escaping models sh quoting, heredocs, substitutions and the common embedded interpreters.
-  A language veil doesn't know (a custom DSL in a string), or data flowing into code in ways other
-  than pipes and variables (writing a script file, then running it), gets shell-level escaping only.
-  Where a value would reach code, only inert values are restored.
+- Shell escaping models sh quoting, heredocs, substitutions and the common embedded interpreters,
+  and values written into files are escaped for the file's language. A language veil doesn't know
+  (a custom DSL in a string), or a file type without rules, gets the value as is. Prefer
+  `veil mcp-db` for database access: it has no escaping to get wrong.
 - Transform coverage is a matrix of 21 known techniques, not a proof: an agent can always invent a new
   encoding (custom scripts). Seeded values < 8 chars are only checked verbatim/encoded.
 - Free‑text PII not in the seed (e.g. a support ticket mentioning a third party) needs the NER layer.
-- Quasi‑identifiers: rare cities, postal codes, birth dates, companies and job titles of seeded people
-  are reported (or pseudonymised with `veil quasi redact`). Other attributes (rare amounts, timestamps,
-  free-text descriptions) and combinations of common values can still enable re‑identification.
+- Quasi‑identifiers: rare cities, postal codes, birth dates, companies and job titles of seeded people,
+  and rare combinations of them on one line, are reported (or pseudonymised with `veil quasi redact`).
+  Combinations spread over several lines are not. Neither are exact amounts and timestamps: they
+  identify a person only together with the database, which never leaves the machine.

@@ -40,8 +40,31 @@ At 15,000 people (120k values) the guard index is 186 MB, builds in 0.3 s, and r
 5. **Token pattern.** The rehydration regex was one alternation of every token and was recompiled on every new token. It is now a regex-compatible matcher that grows in place. A new anchor gets a fresh, small anchor-only automaton, swapped in so that concurrent requests are not disturbed.
 6. **Re-seeding off the request path.** The re-seed thread builds the matcher and guard index for the new value set before swapping it in (`veil.reseed.warm`). It then calls `gc.freeze()`, because full cyclic collections over millions of long-lived tuples were pausing requests by up to ~90 ms. The re-seed interval stretches to 10× the last re-seed's duration (about 6 s here), keeping a constantly written large database under ~10% of one core.
 
+## Later the same day: changes cost what changed
+
+| | before | after |
+|---|---:|---:|
+| re-seed after 10 new customers (1.2M values) | full read + full index rebuild, ~4 s | **0.7 s**: cursor read + grown index copies |
+| redaction of a 234 KB request (120k values) | 74 ms | **36 ms** |
+
+- **Delta reads.** Sources with a natural cursor are read from it between hourly full reads:
+  SQLite `rowid`, Postgres `xmin`, MySQL `updated_at` or an integer key, MongoDB `_id`.
+- **Grown indexes.** The matcher and guard index of the new value set are *copies* of the old ones
+  with the new values added (copy-on-write: the automaton is shared unless a new anchor appears).
+  A test checks they behave byte-identically to a full rebuild.
+- **Linear overlap check.** `detect()` checked each candidate span against every accepted one,
+  which is quadratic in spans per string; a 40-row query result has hundreds. It now uses a sorted
+  list and bisect. This was the cause of a 2× slowdown measured on a busy machine.
+- **A compiled matcher was measured and not adopted.** The Rust `ahocorasick-rs` took **14.3 s and
+  1.65 GB** for 2.4M needles; the anchored Python/C design takes **1.1 s and ~220 MB**.
+
+These measurements were taken while other workloads (Docker VMs) were using the CPU. Absolute times
+vary by ±50%, so the ratios within one run are what to compare.
+
 ## Limits that remain
 
 - Memory is about 1 KB per seeded value, including its encoded aliases and the guard's transformed forms. For tens of millions of values, a compiled matcher (Rust `aho-corasick` / `daachorse`) would be the next step. Seeding a sample is another option, though any person who isn't seeded is then caught only by patterns and NER.
-- A re-seed reads the whole source again. For very large tables, an incremental read (`WHERE updated_at > last`) would be cheaper. Fingerprints already avoid re-reading sources that haven't changed.
-- Python threads share the GIL, so requests are slower while a re-seed runs (seconds at this scale).
+- Deletes and (outside Postgres) updates are picked up by the hourly full read, not the delta.
+- Python threads share the GIL: requests are slower while a re-seed runs. With delta reads and grown
+  indexes, that's under a second per change at 1.2M values, so seeding in a separate process wasn't
+  worth its complexity.

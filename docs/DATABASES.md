@@ -21,6 +21,10 @@ with patterns + NER, 1.8% when the people are seeded** (`captures/ai4privacy/REP
 | SQL Server | `sys.columns`, `MS_Description`, **`sys.sensitivity_classifications`** (information type → kind), **`sys.masked_columns`** (`email()` → email) | text columns; birth dates | PK; FKs from `sys.foreign_key_columns` | fake DB-API connection serving the catalog queries (no server here) |
 | Elasticsearch / OpenSearch | `_mapping` (nested objects as paths), field `meta` (`{"pii": "email"}`), random-score sampling, scroll | objects | `customer_id` / `user_id` when present (denormalised events), else `_id` | fake REST server shaped like Kibana's ecommerce sample |
 | Code (no data) | Prisma (`/// @pii`, `/// @encrypted`, `@map`), Django (`EmailField`, `GenericIPAddressField`, `PhoneNumberField`), Rails (`encrypts`, `filter_attributes`, `schema.rb` comments), SQLAlchemy (`EmailType`…), OpenAPI (`format: email`, `x-pii`), protobuf (`debug_redact`) | — | hints applied to every source whose table/collection matches the model | synthetic project |
+| git history (`git:PATH`) | `git log --all`: authors, committers, `Co-authored-by` | — | one person per email; bots and AI co-authors skipped | synthetic repo + veil's own history |
+| DynamoDB | `ListTables`, `DescribeTable` (table + GSI keys), `Scan` | **key segments**: `PK=USER#email` → column `PK:USER`; maps, lists, sets | items sharing a partition key | fake JSON-protocol endpoint + **DynamoDB Local** (CI and local Docker) |
+| Snowflake | `information_schema.columns`; **SEMANTIC_CATEGORY / PRIVACY_CATEGORY** tags (ACCOUNT_USAGE, else per-table function); comments | VARIANT/OBJECT as JSON | — | fake DB-API connection |
+| BigQuery | REST: schema with **policy tags** and `pii:` descriptions; `tabledata.list` | RECORD / REPEATED paths | — | fake REST server |
 
 `veil seed postgresql://… mysql://… redis://… mongodb://… app.db fixtures/` seeds them all; one run over
 the four local test stores learned 28,914 values.
@@ -63,8 +67,19 @@ the four local test stores learned 28,914 values.
 | Neo4j / InfluxDB | `db.schema.nodeTypeProperties()` / `SHOW TAG KEYS` | node properties / tags (`user`, `client_ip`) | — |
 | Code (no DB) | Prisma, Django, Rails `schema.rb`, SQLAlchemy, Mongoose, GraphQL, OpenAPI, protobuf | names + types | Rails `encrypts`/`filter_attributes`, Lockbox, `prisma-field-encryption` `/// @encrypted`, protobuf `debug_redact`, OpenAPI `format: email`, Django `EmailField` |
 
-Done since: SQL Server, schema-from-code, Elasticsearch (2026-10-21). Next: DynamoDB (key-segment
-splitting) → warehouses (Snowflake/BigQuery native tags).
+Done since (2026-10-21): SQL Server, schema-from-code, Elasticsearch, git history, DynamoDB,
+Snowflake, BigQuery. SQL Server, Elasticsearch and DynamoDB Local also run as real servers in CI.
+Still research only: Oracle, Firestore/CouchDB, Redshift/ClickHouse, Neo4j/InfluxDB.
+
+### Re-seeding reads only what changed
+Between hourly full reads, sources with a natural cursor are read from it:
+- SQLite: `rowid > last`;
+- Postgres: `xmin > last` (also catches updates);
+- MySQL: an `updated_at`-style column, else an integer primary key;
+- MongoDB: `_id > last` (ObjectIds grow with insert time).
+
+Updates in MySQL (without such a column), MongoDB and SQLite, and deletes everywhere, wait for the
+hourly full read.
 
 ### Quasi-identifiers and direct identifiers (2026-10-21)
 Person records also yield birth dates, postal codes, cities, companies and job titles (`qi:*`), each

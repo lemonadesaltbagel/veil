@@ -155,7 +155,7 @@ guard never touches structural keys (`type`, `id`, tool names) and runs its heur
   | mode | tools | behaviour |
   |---|---|---|
   | full | Bash, Read, Grep, Glob, allowlisted MCP (e.g. DB) | all tokens → real |
-  | preserve | Edit, MultiEdit, Write, NotebookEdit | locators (`file_path`, `old_string`) fully; content (`new_string`, `content`) only tokens whose real value **already exists in the target file** → new PII is never written into source/fixtures |
+  | preserve | Edit, MultiEdit, Write, NotebookEdit, Codex `apply_patch` | locators (`file_path`, `old_string`) fully; content (`new_string`, `content`) only tokens whose real value **already exists in the target file** (escaped spellings count) → new PII is never written into source/fixtures; each restored value is **spelled for where it lands** in the file's language (below) |
   | none | WebFetch, WebSearch, Agent, unknown tools; **Bash commands with egress** (curl, wget, ssh, git push…) | tokens stay tokens (fail‑safe; blocks prompt‑injection exfiltration of real data) |
   | notice | Bash using a **pseudonym fragment** (`LIKE '%ab12%'`) or a **byte dump** (`sed l`, `od`, `xxd`, `cat -v`, `base64`) | command replaced by an `echo` explaining why (fragments: cites the person's real tokens); Grep-tool fragments are expanded to the person's real values instead |
 - assistant `text` → rehydrated for display (configurable `--show-tokens`).
@@ -165,6 +165,43 @@ guard never touches structural keys (`type`, `id`, tool names) and runs its heur
   delta; pings/thinking/signatures/usage pass through immediately.
 - `count_tokens`: request redacted, response passed through. Errors: bodies forwarded unmodified.
 - Any redaction failure → 502, never forward raw.
+
+**Restoring into files (`veil/filesafe.py`).** For each restored value, the context is computed at
+its position in the *resulting* file: the existing file with this edit applied, or the whole
+content for Write and new cells.
+
+- **String literal:** escaped for that literal. That covers Python (f-strings get their braces
+  doubled; in raw strings, a quote or backslash can't be spelled, so the token stays), JS
+  (template literals: `${` escaped), Ruby/Perl/PHP interpolation, SQL quote doubling and JSON.
+- **Comment:** the value as is, unless it contains a newline or `*/`.
+- **Code position:** inert values only; otherwise the token stays.
+- **Other file types:** YAML scalars and CSV fields are quoted to their rules, and shell scripts use
+  the command escaper.
+
+Tests parse or run every result; a hostile f-string value created nothing.
+
+**Database tool for the agent (`veil mcp-db`, MCP over stdio).** It removes the shell from database
+access:
+
+- **Bound parameters:** the agent puts pseudonyms inside SQL string literals, and every literal that
+  holds one becomes a **bound parameter** carrying the real value. The value is never SQL text, so
+  there is nothing to escape. A pseudonym outside a literal, or a literal with only *part* of one,
+  is refused with guidance.
+- **Reads only:**
+  - one statement;
+  - the first keyword must be SELECT, WITH, EXPLAIN, SHOW, DESCRIBE, PRAGMA or VALUES;
+  - no write keywords outside literals (data-modifying CTEs, `SELECT … INTO`, `FOR UPDATE`);
+  - PRAGMA only in its schema-reading forms;
+  - a read-only connection or transaction underneath (SQLite `mode=ro`, Postgres
+    `default_transaction_read_only`, MySQL `READ ONLY` session, rollback on SQL Server).
+- **Results come back pseudonymised** and cross the proxy's redaction and guard again.
+- **MongoDB:** `find`, `aggregate` and `count` restore pseudonyms structurally (regex-escaped inside
+  `$regex`) and refuse `$out`, `$merge`, `$where` and `$function`.
+
+`veil init --mcp` registers it with Claude Code in local scope by source number, so no credentials
+appear in any config. Verified end to end with real Claude Code (`veil_dev.mcp_e2e`): the model
+asked by pseudonym, the real row was found, the model saw only pseudonyms, and the developer saw
+real values.
 
 ## OpenAI-format adapters (same lens)
 
@@ -228,8 +265,12 @@ foundry|anthropic-aws`).
 ## Teams
 
 - `veil team export|join`: bundle = token secret + allowlist (scrypt + AES-GCM under a passphrase);
-  the vault key never leaves a machine. Joining over a non-empty vault requires `--reset-vault`
-  (tokens are re-derived deterministically from the new secret).
+  the vault key never leaves a machine. Joining over a non-empty vault requires `--reset-vault`,
+  which *retires* the old pseudonyms: they still restore but are never issued again.
+- Secrets managers: `veil team export --to REF`, `veil team join --from REF` and `veil team sync`.
+  REF is `op://` (1Password), `aws-sm://`, `gcp-sm://`, `vault://` (HashiCorp KV v2), `env:` or
+  `file:`. Secrets travel on stdin or in request bodies, never in argv. `sync` re-reads the
+  remembered source; when the lead has rotated the secret, old pseudonyms are retired the same way.
 - `veil team allow`: team allowlist (values never treated as PII), applied to seeding and detection.
 - `veil team managed-settings`: `managed-settings.d/50-veil.json` with managed `env.ANTHROPIC_BASE_URL`
   pinned + `allowedProviders: ["customEndpoint"]` (Claude Code admits only that exact endpoint;
@@ -264,7 +305,17 @@ fingerprint of each source every 30 s. The fingerprints are:
 - files: mtime/size, including SQLite `-wal`.
 
 On a change, the thread re-seeds the source into a copy of the known values, builds the matcher and
-guard indexes, and swaps the copy in atomically. A request never waits for a rebuild; that took 94 s
+guard indexes, and swaps the copy in atomically. Between hourly full reads, it reads only changed
+rows from a cursor:
+
+- SQLite: `rowid`;
+- Postgres: `xmin`, which changes on insert *and* update;
+- MySQL: an `updated_at`-style column or an integer key;
+- MongoDB: `_id`.
+
+A few new values grow *copies* of the existing indexes instead of rebuilding them, tested
+byte-identical to a full rebuild. At 1.2M values a change costs ~0.7 s instead of ~4 s. Foreign keys
+of new rows that point at older people fall back to that person's deterministic group (`Customer:5`). A request never waits for a rebuild; that took 94 s
 at 1.2M values before the indexes were moved to the thread. Unreachable sources keep their last
 snapshot. The interval stretches to 10× the last re-seed's duration.
 
@@ -285,6 +336,12 @@ and the conversation consistent, wins over regrouping it with its person.
   Each value is reported once per proxy run.
 - `veil quasi redact` pseudonymises them (`city_ab12`, `dob_ab12`) without the person's code, so
   three people who share a city are not linked to each other. `veil quasi off` disables both.
+- **Rare combinations of common values.** Each quasi value keeps the set of people who have it.
+  When 2–3 kinds share a line, the combination's count is the intersection of those sets, computed
+  on demand and cached. City + job title held by fewer than 5 people is then reported or
+  pseudonymised even though each value alone is common. Dictionary words ("Engineer", "Nice") take
+  part in combinations but are never matched alone. Cost: ~3–6 ms on a 218 KB request with 50k
+  people.
 
 ## Keys and rotation
 
@@ -382,21 +439,20 @@ system prompt, and fails open on schema mismatch → backup only.
 1c. **Seeders** (SQLite, Postgres, MySQL/MariaDB, MongoDB, Redis, fixture files, env), native labels,
     pg_anonymizer dictionary, FK/value grouping, fragment handling, optional NER, escape/byte-dump defence. ✅
     See `docs/DATABASES.md`.
-2. ✅ SQL Server (native classifications), schema-from-code, Elasticsearch, continuous re-seeding
-   (2026-10-21). Still to do: DynamoDB key segments, warehouses, `git log` authors.
+2. ✅ SQL Server (native classifications), schema-from-code, Elasticsearch, continuous re-seeding,
+   DynamoDB key segments, Snowflake and BigQuery (native tags), `git log` authors (2026-10-21).
 3. ✅ Leak harnesses: `veil audit` (canary scenario, real agents, offline), bypass matrix
    (`veil_dev.redteam`), pilot on a real repository (`veil_dev.pilot`), CI with live databases.
-4. ✅ done (see 1d). ✅ Per-project vaults, key rotation (2026-10-21). Still open: team secret distribution
-   beyond a shared bundle.
+4. ✅ done (see 1d). ✅ Per-project vaults, key rotation, team secrets via secrets managers (2026-10-21).
 5. ✅ Optional NER layer (GLiNER) for free text; ✅ quasi‑identifier warnings / redaction (2026-10-21).
-6. ✅ OpenAI Chat Completions + Responses adapters (Aider/Continue/SDK; Codex). Still open: Bedrock/Vertex
-   formats; MCP DB server with masking.
+6. ✅ OpenAI Chat Completions + Responses adapters (Aider/Continue/SDK; Codex); ✅ Bedrock/Vertex;
+   ✅ database tool for the agent with bound parameters (`veil mcp-db`, 2026-10-21).
 7. ✅ `veil init` / `status` / `service`; ✅ team mode, managed-settings drop-in, Linux (systemd + Secret
    Service), Bedrock/Vertex, fast hooks, packaging (2026-10-20).
 8. ✅ Released: `veil-proxy` 0.1.1 / 0.1.2 on PyPI, Homebrew tap. ✅ Display modes, re-seeding, pilot,
    CI, scale to 1M values, Windows, Microsoft Foundry / Claude Platform on AWS, SQL Server and
-   Elasticsearch seeders, schema hints from code (2026-10-21). Open: real-cloud runs (needs
-   AWS/GCP/Azure accounts), DynamoDB and warehouse seeders.
+   Elasticsearch seeders, schema hints from code (2026-10-21). ✅ 0.2.0 / 0.2.1 released.
+   Open: real-cloud runs (needs AWS/GCP/Azure accounts); a pilot on a real project.
 
 ## Open questions
 
