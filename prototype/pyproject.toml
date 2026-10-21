@@ -20,6 +20,11 @@ dependencies = [
     "pyahocorasick>=2.3.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/lemonadesaltbagel/veil"
+Repository = "https://github.com/lemonadesaltbagel/veil"
+Issues = "https://github.com/lemonadesaltbagel/veil/issues"
+
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.3.6"]
 mysql = ["pymysql>=1.2.3"]

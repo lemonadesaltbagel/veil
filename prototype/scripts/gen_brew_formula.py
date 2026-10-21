@@ -11,12 +11,12 @@ import os
 import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKIP = {"veil", "cryptography", "cffi", "pycparser"}  # provided by `depends_on "cryptography"`
+SKIP = {"veil-proxy", "cryptography", "cffi", "pycparser"}  # provided by `depends_on "cryptography"`
 
 
 def core_closure(lock: dict) -> list[dict]:
     pkgs = {p["name"]: p for p in lock["package"]}
-    todo, seen = [d["name"] for d in pkgs["veil"].get("dependencies", [])], set()
+    todo, seen = [d["name"] for d in pkgs["veil-proxy"].get("dependencies", [])], set()
     while todo:
         name = todo.pop()
         if name in seen:
@@ -28,10 +28,10 @@ def core_closure(lock: dict) -> list[dict]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="https://github.com/OWNER/veil/releases/download/v0.1.0/veil-0.1.0.tar.gz")
+    ap.add_argument("--url", default="https://github.com/lemonadesaltbagel/veil/releases/download/v0.1.0/veil_proxy-0.1.0.tar.gz")
     ap.add_argument("--sha256")
     args = ap.parse_args()
-    sdist = os.path.join(ROOT, "dist", "veil-0.1.0.tar.gz")
+    sdist = os.path.join(ROOT, "dist", "veil_proxy-0.1.0.tar.gz")
     sha = args.sha256 or (hashlib.sha256(open(sdist, "rb").read()).hexdigest() if os.path.exists(sdist) else "TODO")
     lock = tomllib.load(open(os.path.join(ROOT, "uv.lock"), "rb"))
     res = ""
@@ -44,7 +44,7 @@ def main() -> None:
   include Language::Python::Virtualenv
 
   desc "Privacy proxy for AI coding agents: models see pseudonyms, you keep real values"
-  homepage "https://github.com/OWNER/veil"
+  homepage "https://github.com/lemonadesaltbagel/veil"
   url "{args.url}"
   sha256 "{sha}"
 

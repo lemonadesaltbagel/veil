@@ -12,6 +12,18 @@ veil service install                  # proxy as a LaunchAgent (macOS) / systemd
 veil status ~/code/myapp
 ```
 
+Evidence from our own test runs (details and the harness to re-run them are on GitHub:
+https://github.com/lemonadesaltbagel/veil):
+
+- 39 requests from real agent sessions against a live model leaked **0** real values (checked with
+  a scanner that also decodes escaped and transformed text), and every session still found the bug.
+- Seeding from your own data lets **1.8%** of names and contact details through, versus 80.4% for
+  pattern matching (1,000 labelled records).
+- **20/20** one-command bypass transforms are contained, and restored values are escaped for their
+  shell/SQL context (35/35 injection tests).
+- Prompt caching keeps working (74–89% cache hits); about 19 ms overhead per request at 40k seeded
+  values.
+
 One local proxy (default `127.0.0.1:8787`) serves every client, routed by path:
 Anthropic Messages (Claude Code, Agent SDK), Amazon Bedrock InvokeModel (binary eventstream),
 Google Vertex rawPredict, OpenAI Chat Completions (Aider, Continue, OpenAI SDK) and

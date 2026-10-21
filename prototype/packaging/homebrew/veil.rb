@@ -2,9 +2,9 @@ class Veil < Formula
   include Language::Python::Virtualenv
 
   desc "Privacy proxy for AI coding agents: models see pseudonyms, you keep real values"
-  homepage "https://github.com/OWNER/veil"
-  url "https://github.com/OWNER/veil/releases/download/v0.1.0/veil-0.1.0.tar.gz"
-  sha256 "d6e83d016caedbd9414c19506d9a502cb363d689a9d7c322735765f1ec01ae9e"
+  homepage "https://github.com/lemonadesaltbagel/veil"
+  url "https://github.com/lemonadesaltbagel/veil/releases/download/v0.1.0/veil_proxy-0.1.0.tar.gz"
+  sha256 "a0d5ae19a8f99c545a5c2dd4f80b01be474bdcc7428a042c9b54fc4a2571dcf4"
 
   depends_on "cryptography"
   depends_on "python@3.13"
