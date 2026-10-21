@@ -51,6 +51,8 @@ def load() -> Veil:
     from .detect import set_allowlist
     h = home()
     set_allowlist(config().get("allow", []))
+    from .sources.core import set_hints
+    set_hints(config().get("schema_hints", {}))
     from .rotate import finish_interrupted
     if finish_interrupted(h):
         import sys

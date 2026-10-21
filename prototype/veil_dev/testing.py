@@ -80,12 +80,14 @@ class Recorder:
 
 def start_proxy(veil: Veil, upstream: str, recorder: Recorder, policy: Policy | None = None,
                 log=None, openai_upstream: str | None = None, bedrock_upstream: str | None = None,
-                vertex_upstream: str | None = None) -> ThreadingHTTPServer:
+                vertex_upstream: str | None = None, foundry_upstream: str | None = None,
+                anthropic_aws_upstream: str | None = None) -> ThreadingHTTPServer:
     client = httpx.Client(trust_env=False, timeout=httpx.Timeout(300, connect=15))
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
         veil, policy or Policy(), upstream, client, log=log or open(os.devnull, "w"), observer=recorder,
         openai_upstream=openai_upstream or upstream, bedrock_upstream=bedrock_upstream or upstream,
-        vertex_upstream=vertex_upstream or upstream))
+        vertex_upstream=vertex_upstream or upstream, foundry_upstream=foundry_upstream or upstream,
+        anthropic_aws_upstream=anthropic_aws_upstream or upstream))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -187,6 +189,7 @@ def start_mock_llm(db_path: str = "chinook.sqlite") -> ThreadingHTTPServer:
         def do_POST(self):
             raw = self.rfile.read(int(self.headers.get("content-length") or 0))
             body = json.loads(raw) if raw else {}
+            self.server.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}, raw))
             if "count_tokens" in self.path:
                 return self._send(200, "application/json", b'{"input_tokens": 1000}')
             blocks = model_turn(body, db_path)
@@ -199,6 +202,7 @@ def start_mock_llm(db_path: str = "chinook.sqlite") -> ThreadingHTTPServer:
             self._send(200, "application/json", json.dumps(msg).encode())
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    server.requests = []  # (path, headers, raw body) as received: what an upstream would see
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 

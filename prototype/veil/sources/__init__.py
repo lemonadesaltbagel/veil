@@ -37,6 +37,12 @@ def seed(known: KnownValues, uri: str) -> Report:
     if u.scheme in ("mysql", "mariadb"):
         return seed_mysql(known, u.hostname or "127.0.0.1", unquote(u.username or "root"),
                           unquote(u.password or ""), u.path.lstrip("/"), u.port or 3306)
+    if u.scheme.split("+")[0] in ("elasticsearch", "opensearch", "es"):
+        from .elastic import seed_elasticsearch
+        return seed_elasticsearch(known, uri)
+    if u.scheme in ("mssql", "sqlserver"):
+        from .mssql import seed_mssql
+        return seed_mssql(known, uri)
     if u.scheme in ("redis", "rediss"):
         return seed_redis(known, uri)
     if u.scheme in ("mongodb", "mongodb+srv"):

@@ -24,6 +24,7 @@ import re
 import struct
 import subprocess
 import time
+from urllib.parse import urlparse
 import zlib
 
 BEDROCK_PATH = re.compile(r"^/model/(?P<model>[^/]+)/(?P<op>invoke|invoke-with-response-stream|count-tokens)$")
@@ -147,4 +148,72 @@ def bedrock_auth(method: str, url: str, headers: dict, body: bytes | None) -> di
     signed = {k: v for k, v in headers.items() if k.lower() not in ("host", "content-length")}
     req = AWSRequest(method=method, url=url, data=body or b"", headers=signed)
     SigV4Auth(creds.get_frozen_credentials(), "bedrock", region).add_auth(req)
+    return dict(req.headers.items())
+
+
+# -- Microsoft Foundry and Claude Platform on AWS: Anthropic Messages under a path prefix --
+# Claude Code: ANTHROPIC_FOUNDRY_BASE_URL=http://127.0.0.1:8787/foundry (CLAUDE_CODE_USE_FOUNDRY=1)
+#              ANTHROPIC_AWS_BASE_URL=http://127.0.0.1:8787/anthropic-aws (CLAUDE_CODE_USE_ANTHROPIC_AWS=1)
+PREFIXES = {"/foundry": "foundry", "/anthropic-aws": "anthropic-aws"}
+_entra_token = {"value": None, "exp": 0.0}
+
+
+def split_prefix(path: str) -> tuple[str | None, str]:
+    for prefix, provider in PREFIXES.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return provider, path[len(prefix):] or "/"
+    return None, path
+
+
+def _has_auth(headers: dict) -> bool:
+    return any(k.lower() in ("authorization", "x-api-key") for k in headers)
+
+
+def foundry_auth(headers: dict) -> dict:
+    """Client credentials (x-api-key or an Entra bearer token) don't cover the body: pass them on.
+    With CLAUDE_CODE_SKIP_FOUNDRY_AUTH=1, veil adds ANTHROPIC_FOUNDRY_API_KEY or an Entra token."""
+    if _has_auth(headers):
+        return headers
+    if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
+        return {**headers, "x-api-key": os.environ["ANTHROPIC_FOUNDRY_API_KEY"]}
+    token = os.environ.get("VEIL_FOUNDRY_TOKEN")
+    if not token:
+        if _entra_token["value"] and time.time() < _entra_token["exp"]:
+            token = _entra_token["value"]
+        else:
+            try:
+                token = subprocess.run(["az", "account", "get-access-token", "--resource",
+                                        "https://cognitiveservices.azure.com", "--query", "accessToken", "-o", "tsv"],
+                                       capture_output=True, text=True, timeout=30).stdout.strip() or None
+            except OSError:
+                token = None
+            _entra_token.update(value=token, exp=time.time() + 45 * 60)
+    return {**headers, "authorization": f"Bearer {token}"} if token else headers
+
+
+def anthropic_aws_auth(method: str, url: str, headers: dict, body: bytes | None) -> dict:
+    """A workspace API key passes through; SigV4 covers the body, so with
+    CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH=1 veil signs the *redacted* request itself.
+    The `anthropic-workspace-id` header is forwarded unchanged (it's not a hop header)."""
+    if _has_auth(headers):
+        return headers
+    if os.environ.get("ANTHROPIC_AWS_API_KEY"):
+        return {**headers, "x-api-key": os.environ["ANTHROPIC_AWS_API_KEY"]}
+    try:
+        import botocore.session
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+    except ImportError:
+        return headers
+    creds = botocore.session.get_session().get_credentials()
+    if creds is None:
+        return headers
+    host = urlparse(url).hostname or ""
+    parts = host.split(".")
+    # aws-external-anthropic.{region}.api.aws (the service name is not documented: overridable)
+    service = os.environ.get("VEIL_ANTHROPIC_AWS_SIGV4_SERVICE") or parts[0]
+    region = os.environ.get("AWS_REGION") or (parts[1] if len(parts) > 2 else "us-east-1")
+    signed = {k: v for k, v in headers.items() if k.lower() not in ("host", "content-length")}
+    req = AWSRequest(method=method, url=url, data=body or b"", headers=signed)
+    SigV4Auth(creds.get_frozen_credentials(), service, region).add_auth(req)
     return dict(req.headers.items())

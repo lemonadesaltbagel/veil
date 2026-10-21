@@ -70,6 +70,31 @@ def fingerprint(source: str) -> str:
                 return _digest("mysql", cur.fetchone())
         finally:
             c.close()
+    if u.scheme.split("+")[0] in ("elasticsearch", "opensearch", "es"):
+        from .sources.elastic import _client
+        es, indices = _client(source)
+        with es:
+            r = es.get("/" + (",".join(indices) or "_all") + "/_stats/docs,indexing").json()
+        t = (r.get("_all") or {}).get("primaries") or {}
+        return _digest("es", (t.get("docs") or {}).get("count"), (t.get("indexing") or {}).get("index_total"),
+                       (t.get("indexing") or {}).get("delete_total"))
+    if u.scheme in ("mssql", "sqlserver"):
+        from .sources.mssql import _connect
+        c = _connect(source)
+        try:
+            cur = c.cursor()
+            cur.execute("SELECT SUM(p.rows), COUNT(*) FROM sys.partitions p JOIN sys.tables t "
+                        "ON t.object_id = p.object_id WHERE p.index_id IN (0, 1)")
+            rows = cur.fetchone()
+            try:  # write counters need VIEW SERVER STATE; row counts alone still catch inserts
+                cur.execute("SELECT SUM(user_updates), MAX(last_user_update) FROM sys.dm_db_index_usage_stats "
+                            "WHERE database_id = DB_ID()")
+                writes = cur.fetchone()
+            except Exception:
+                writes = None
+            return _digest("mssql", rows, writes)
+        finally:
+            c.close()
     if u.scheme in ("redis", "rediss"):
         import redis
         r = redis.Redis.from_url(source, socket_timeout=5)

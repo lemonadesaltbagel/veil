@@ -209,6 +209,15 @@ def run_claude(proxy_url: str, api_key: str, model: str | None, ws: str, max_tur
         env.pop("ANTHROPIC_BASE_URL"); env.pop("ANTHROPIC_API_KEY")
         env.update({"CLAUDE_CODE_USE_BEDROCK": "1", "ANTHROPIC_BEDROCK_BASE_URL": proxy_url,
                     "CLAUDE_CODE_SKIP_BEDROCK_AUTH": "1", "AWS_REGION": "us-east-1"})
+    elif provider == "foundry":  # Microsoft Foundry: Anthropic Messages under /foundry; key passes through
+        env.pop("ANTHROPIC_BASE_URL"); env.pop("ANTHROPIC_API_KEY")
+        env.update({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_BASE_URL": proxy_url + "/foundry",
+                    "ANTHROPIC_FOUNDRY_API_KEY": api_key})
+    elif provider == "anthropic-aws":  # Claude Platform on AWS: veil signs (SigV4) after redaction
+        env.pop("ANTHROPIC_BASE_URL"); env.pop("ANTHROPIC_API_KEY")
+        env.update({"CLAUDE_CODE_USE_ANTHROPIC_AWS": "1", "ANTHROPIC_AWS_BASE_URL": proxy_url + "/anthropic-aws",
+                    "ANTHROPIC_AWS_WORKSPACE_ID": "wrkspc_veil_audit", "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH": "1",
+                    "AWS_REGION": "us-east-1"})
     elif provider == "vertex":  # Claude Code speaks Vertex rawPredict to veil; veil adds the Google token
         env.pop("ANTHROPIC_BASE_URL"); env.pop("ANTHROPIC_API_KEY")
         env.update({"CLAUDE_CODE_USE_VERTEX": "1", "ANTHROPIC_VERTEX_BASE_URL": proxy_url + "/v1",
@@ -250,7 +259,7 @@ def _load_env_key(name: str) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="veil audit")
     p.add_argument("--driver", choices=["claude", "sdk", "openai", "codex"], default="claude")
-    p.add_argument("--provider", choices=["anthropic", "bedrock", "vertex"], default="anthropic",
+    p.add_argument("--provider", choices=["anthropic", "bedrock", "vertex", "foundry", "anthropic-aws"], default="anthropic",
                    help="claude driver: which API format Claude Code speaks to veil")
     p.add_argument("--upstream", default="mock", help="'mock' (offline fake LLM) or an Anthropic-format base URL")
     p.add_argument("--api-key-env", default="ANTHROPIC_API_KEY")
@@ -268,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         from veil.ner import GlinerDetector
         veil.ner = GlinerDetector()
     mock = None
-    if args.upstream == "mock" and args.provider != "anthropic":
+    if args.upstream == "mock" and args.provider in ("bedrock", "vertex"):
         mock = start_mock_cloud(db_path="chinook.sqlite")
         upstream, api_key = f"http://127.0.0.1:{mock.server_port}", "unused-cloud-auth-skipped"
     elif args.upstream == "mock" and args.driver == "codex":

@@ -29,6 +29,9 @@ from typing import Any, Iterable, Iterator
 
 from ..detect import KnownValues
 
+# whose name: customer_full_name, billing_first_name, contact_name (never product_name)
+_WHO = r"((customer|contact|billing|shipping|owner|person|recipient|sender|patient|employee|member|guest)_?)*"
+
 COLUMN_KINDS = [
     ("secret", re.compile(r"password|passwd|_hash$|^hash$|token|api_?key|secret|^jwt$", re.I)),
     # government / bank identifiers: direct identifiers, always pseudonymised
@@ -36,12 +39,12 @@ COLUMN_KINDS = [
                              r"driver_?s?_?licen[cs]e|^iban$|^bsn$|^cpf$|aadhaar|^nhs_?(no|number)$|^sin$", re.I)),
     ("email", re.compile(r"e_?mail", re.I)),
     ("username", re.compile(r"^(user_?name|login|handle|screen_?name|nick(name)?|alias(es)?)$", re.I)),
-    ("first_name", re.compile(r"^(first|given)_?name$", re.I)),
-    ("last_name", re.compile(r"^(last|family|sur)_?name$", re.I)),
-    ("name", re.compile(r"^(full_?|display_?|real_?|legal_?)?name$", re.I)),
+    ("first_name", re.compile(rf"^{_WHO}(first|given)_?name$", re.I)),
+    ("last_name", re.compile(rf"^{_WHO}(last|family|sur)_?name$", re.I)),
+    ("name", re.compile(rf"^{_WHO}((full|display|real|legal)_?)?name$", re.I)),
     ("phone", re.compile(r"phone|mobile|^tel(ephone)?$|^fax$|^cell$", re.I)),
     ("ipv4", re.compile(r"(^|_)ip(_?addr(ess)?)?$", re.I)),        # before address: ip_address
-    ("address", re.compile(r"^(?!.*(?:mac|ip|e_?mail|web|url)_?addr).*address(_?line_?\d)?$|^street", re.I)),
+    ("address", re.compile(r"^(?!(?:.*_)?(?:mac|ip|e_?mail|web|url)_?addr).*address(_?line_?\d)?$|^street", re.I)),
 ]
 KINDS = {k for k, _ in COLUMN_KINDS}
 IDENTITY_KINDS = {"email", "username", "name", "first_name", "last_name"}
@@ -190,18 +193,26 @@ def extract(record: dict, path: str) -> list[Any]:
 QUASI_COLUMNS = [
     ("dob", re.compile(r"(^|_)(dob|birth_?date|date_?of_?birth|birthday|born_?on)$", re.I)),
     ("postal_code", re.compile(r"(^|_)(zip(_?code)?|postal_?code|post_?code|plz)$", re.I)),
-    ("city", re.compile(r"(^|_)(city|town|locality)$", re.I)),
+    ("city", re.compile(r"(^|_)(city|town|locality)(_?name)?$", re.I)),
     ("company", re.compile(r"(^|_)(company(_?name)?|employer|organi[sz]ation(_?name)?|org_?name|business_?name)$", re.I)),
     ("job_title", re.compile(r"(^|_)(job_?title|title|occupation|position|designation)$", re.I)),
 ]
 
 
+QUASI_KIND_NAMES = {k for k, _ in QUASI_COLUMNS}
+
+
 def classify_quasi(path: str) -> str | None:
-    leaf = path.split(".")[-1].removesuffix("[]")
+    leaf = snake(path.split(".")[-1].removesuffix("[]"))
     for kind, rx in QUASI_COLUMNS:
         if rx.search(leaf):
             return kind
     return None
+
+
+def snake(word: str) -> str:
+    """ShipAddress -> ship_address, IPAddress -> ip_address, postalCode -> postal_code."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", word).lower()
 
 
 def _singulars(word: str) -> list[str]:
@@ -218,9 +229,9 @@ def classify_name(container: str, path: str) -> str | None:
     leaf, parent = parts[-1], (parts[-2] if len(parts) > 1 else None)
     if parent and parent.lower() in ("name", "names", "fullname", "full_name") and leaf.lower() in NAME_PARTS:
         return NAME_PARTS[leaf.lower()]
-    candidates = _singulars(leaf)
+    candidates = _singulars(snake(leaf))
     if parent and leaf.lower() in GENERIC_LEAVES:
-        candidates = _singulars(parent) + candidates
+        candidates = _singulars(snake(parent)) + candidates
     for word in candidates:
         for kind, rx in COLUMN_KINDS:
             if rx.search(word):
@@ -257,9 +268,11 @@ def classify_comment(comment: str | None) -> str | None:
     """`pii:email`, `PII=phone`, `[pii: username] ...` -> kind; bare 'pii' -> 'pii'."""
     if not comment:
         return None
-    m = re.search(r"\bpii\s*[:=]\s*([a-z_]+)", comment, re.I)
+    m = re.search(r"\bpii\s*[:=]\s*([a-z0-9_]+)", comment, re.I)
     if m and m.group(1).lower() in KINDS:
         return m.group(1).lower()
+    if m and m.group(1).lower() in QUASI_KIND_NAMES:  # pii:dob, pii:postal_code ...
+        return "qi:" + m.group(1).lower()
     return "pii" if re.search(r"\b(pii|personal data|gdpr)\b", comment, re.I) else None
 
 
@@ -285,10 +298,23 @@ class Container:
     fks: dict[str, tuple[str, bool]] = field(default_factory=dict)  # col -> (target container, unique)
 
 
+# Field hints declared in application code (schema.scan); set from config by state.load()
+HINTS: dict[str, dict[str, str]] = {}
+
+
+def set_hints(hints: dict) -> None:
+    HINTS.clear()
+    HINTS.update(hints or {})
+
+
 def plan(container: Container) -> list[Field]:
-    """Decide which field paths hold PII, from comments, names and sampled values."""
+    """Decide which field paths hold PII, from comments, code-declared schema hints,
+    names and sampled values."""
+    from .schema import key
+    hints = HINTS.get(key(container.name), {})
     fields: list[Field] = []
     bare_names: list[str] = []
+    bare_users: list[str] = []
     unclassified: list[str] = []
     for col, meta in container.columns.items():
         if col == container.key or col in container.fks:
@@ -311,6 +337,10 @@ def plan(container: Container) -> list[Field]:
             if tagged and tagged != "pii" and p == col:
                 fields.append(Field(container.name, p, tagged, "comment"))
                 continue
+            hint = hints.get(p.lower()) if p == col else None
+            if hint and hint != "pii":
+                fields.append(Field(container.name, p, hint, "schema"))
+                continue
             kind = classify_name(container.name, p)
             if kind:
                 fields.append(Field(container.name, p, kind, "name"))
@@ -318,14 +348,21 @@ def plan(container: Container) -> list[Field]:
             kind = classify_values(samples)
             if kind:
                 fields.append(Field(container.name, p, kind, "comment+values" if tagged else "values"))
+            elif p == col and ("pii" in (tagged, hint)):
+                # declared sensitive (column comment, Rails `encrypts`, Prisma @encrypted) but of no
+                # recognisable kind: still seeded, as an opaque value
+                fields.append(Field(container.name, p, "pii", "comment" if tagged else "schema"))
             elif p.split(".")[-1].removesuffix("[]").lower() == "name":
                 bare_names.append(p)
+            elif p.split(".")[-1].removesuffix("[]").lower() == "user" and _handles(samples):
+                bare_users.append(p)
             else:
                 unclassified.append(p)
     # A bare `name` next to an email/username in the same record is a person's name,
     # whatever the container is called (export.json, items, ...).
     if any(f.kind in LINK_KINDS for f in fields):
         fields += [Field(container.name, p, "name", "name+context") for p in bare_names]
+        fields += [Field(container.name, p, "username", "name+context") for p in bare_users]
     if is_person(fields):
         taken = {f.path for f in fields}
         for p in unclassified:
@@ -333,6 +370,12 @@ def plan(container: Container) -> list[Field]:
             if kind and p not in taken:
                 fields.append(Field(container.name, p, "qi:" + kind, "name"))
     return fields
+
+
+def _handles(samples: list) -> bool:
+    """Values that look like user handles: short strings, no spaces, not numeric ids."""
+    vals = [v for v in samples if isinstance(v, str) and v]
+    return bool(vals) and sum(1 for v in vals if " " not in v and not v.isdigit() and len(v) <= 64) / len(vals) >= 0.8
 
 
 def is_person(fields: list[Field]) -> bool:

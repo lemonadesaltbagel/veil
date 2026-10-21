@@ -32,6 +32,7 @@ mongo = ["pymongo>=4.19.0"]
 redis = ["redis>=8.1.0"]
 bedrock = ["botocore>=1.43.115"]
 ner = ["gliner>=0.2.29", "onnxruntime>=1.31.0"]
+mssql = ["pymssql>=2.3"]  # not in `all`: building it from source needs FreeTDS
 all = ["veil-proxy[postgres,mysql,mongo,redis,bedrock]"]
 
 [project.scripts]

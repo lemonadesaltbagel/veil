@@ -47,7 +47,8 @@ def _strings(node):
 
 def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client, log=sys.stderr,
                  observer=None, openai_upstream: str | None = None, bedrock_upstream: str | None = None,
-                 vertex_upstream: str | None = None):
+                 vertex_upstream: str | None = None, foundry_upstream: str | None = None,
+                 anthropic_aws_upstream: str | None = None):
     """`observer(exchange)` (optional) receives one dict per request: path, safe headers,
     `original` body, `sent` body (exact upstream payload), `model_view` (the model's
     reply before rehydration), status, findings and timings. For audits and tests."""
@@ -153,15 +154,18 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
             self.pol = dataclasses.replace(policy, display_real=mode == "real")
             exch["display"] = mode
             veil.quasi_mode = quasi.mode(home())
-            path = self.path
+            provider, path = cloud.split_prefix(self.path)  # /foundry/..., /anthropic-aws/...
+            provider_upstream = {"foundry": foundry_upstream, "anthropic-aws": anthropic_aws_upstream}.get(provider)
+            if provider and not provider_upstream:
+                return self._fail(404, f"veil: no upstream configured for {provider} (--{provider}-upstream)")
             api = "anthropic" if path.split("?")[0].startswith("/v1/messages") else \
                 ("chat" if is_chat_path(path) else ("responses" if is_responses_path(path) else cloud.route(path)))
             is_messages = api is not None
-            target = {"chat": openai_upstream, "responses": openai_upstream, "bedrock": bedrock_upstream,
-                      "vertex": vertex_upstream}.get(api, upstream)
+            target = provider_upstream or {"chat": openai_upstream, "responses": openai_upstream,
+                                           "bedrock": bedrock_upstream, "vertex": vertex_upstream}.get(api, upstream)
             if api in ("chat", "responses", "bedrock", "vertex") and not target:
                 return self._fail(404, f"veil: no upstream configured for {api} (--{'openai' if api in ('chat', 'responses') else api}-upstream)")
-            if api is None and (bedrock_upstream or vertex_upstream) and not path.startswith("/v1/"):
+            if api is None and not provider and (bedrock_upstream or vertex_upstream) and not path.startswith("/v1/"):
                 target = bedrock_upstream or vertex_upstream  # e.g. Bedrock GET /inference-profiles
             body_bytes = raw
             stream = False
@@ -210,6 +214,10 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                 headers = cloud.bedrock_auth(self.command, url, headers, body_bytes)  # signs the *redacted* body
             elif api == "vertex":
                 headers = cloud.vertex_auth(headers)
+            elif provider == "foundry":
+                headers = cloud.foundry_auth(headers)
+            elif provider == "anthropic-aws":
+                headers = cloud.anthropic_aws_auth(self.command, url, headers, body_bytes)
             req = client.build_request(self.command, url, headers=headers, content=body_bytes)
             t1 = time.perf_counter()
             resp = client.send(req, stream=True)
@@ -394,13 +402,16 @@ def capture_observer(directory: str):
 
 def serve(veil: Veil, policy: Policy, port: int = 8787, upstream: str = "https://api.anthropic.com",
           capture: str | None = None, openai_upstream: str | None = None, bedrock_upstream: str | None = None,
-          vertex_upstream: str | None = None):
+          vertex_upstream: str | None = None, foundry_upstream: str | None = None,
+          anthropic_aws_upstream: str | None = None):
     client = httpx.Client(timeout=httpx.Timeout(600, connect=10))
     observer = capture_observer(capture) if capture else None
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(veil, policy, upstream, client,
                                                                    observer=observer,
                                                                    openai_upstream=openai_upstream,
                                                                    bedrock_upstream=bedrock_upstream,
-                                                                   vertex_upstream=vertex_upstream))
+                                                                   vertex_upstream=vertex_upstream,
+                                                                   foundry_upstream=foundry_upstream,
+                                                                   anthropic_aws_upstream=anthropic_aws_upstream))
     print(f"[veil] listening on http://127.0.0.1:{port} -> {upstream}", file=sys.stderr)
     return server

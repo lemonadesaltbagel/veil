@@ -37,6 +37,26 @@ def _hook(veil, kind: str) -> int:
     return 0
 
 
+def _learn_schema(project: str, save: bool = True) -> dict:
+    """Field hints from the project's ORM schema / annotations, remembered in config.json
+    (names only) so every later seed and re-seed applies them."""
+    from .sources import core, schema
+    hints = schema.scan(project)
+    if hints and not save:
+        print(f"  schema  {sum(map(len, hints.values()))} personal field(s) declared in code", file=sys.stderr)
+    elif hints:
+        cfg = state.config()
+        merged = cfg.get("schema_hints", {})
+        for table, fields in hints.items():
+            merged.setdefault(table, {}).update(fields)
+        cfg["schema_hints"] = merged
+        state.save_config(cfg)
+        core.set_hints(merged)
+        n = sum(map(len, hints.values()))
+        print(f"  schema  {n} personal field(s) declared in code across {len(hints)} model(s)", file=sys.stderr)
+    return hints
+
+
 def _init(veil, args) -> int:
     import os
     from . import adopt
@@ -47,6 +67,8 @@ def _init(veil, args) -> int:
     for src, where in sources:
         print(f"  source  {adopt.redact_uri(src) if '://' in src else os.path.relpath(src, project)}   ({where})",
               file=sys.stderr)
+    if not args.no_detect:
+        _learn_schema(project, save=not args.dry_run)
     if args.dry_run:
         print("  (dry run: nothing seeded or written)", file=sys.stderr)
         return 0
@@ -192,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("seed"); s.add_argument("sources", nargs="*")
     s.add_argument("--no-remember", action="store_true", help="don't re-seed this source automatically")
     s.add_argument("--refresh", action="store_true", help="re-seed every remembered source now")
+    s.add_argument("--schema", metavar="DIR", help="learn personal fields from ORM schemas / annotations in DIR first")
     s = sub.add_parser("sources"); s.add_argument("action", nargs="?", choices=["list", "remove"], default="list")
     s.add_argument("which", nargs="?", help="index (from `veil sources`) or the source itself")
     s = sub.add_parser("seed-sqlite"); s.add_argument("path")  # back-compat alias
@@ -218,6 +241,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--reseed-interval", type=float, default=30,
                    help="seconds between change checks of remembered sources (0 = off)")
     s.add_argument("--vertex-upstream", metavar="URL", help="e.g. https://us-east5-aiplatform.googleapis.com")
+    s.add_argument("--foundry-upstream", metavar="URL",
+                   help="Microsoft Foundry, served at /foundry: e.g. https://RESOURCE.services.ai.azure.com/anthropic")
+    s.add_argument("--anthropic-aws-upstream", metavar="URL",
+                   help="Claude Platform on AWS, served at /anthropic-aws: e.g. https://aws-external-anthropic.us-east-1.api.aws")
     s = sub.add_parser("hook"); s.add_argument("kind", choices=["pre", "post"])
     s = sub.add_parser("init"); s.add_argument("project", nargs="?", default=".")
     s.add_argument("--port", type=int, default=8787); s.add_argument("--source", action="append", default=[])
@@ -272,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd in ("seed", "seed-sqlite"):
         from .adopt import redact_uri
         given = (args.sources if args.cmd == "seed" else [args.path])
+        if getattr(args, "schema", None):
+            _learn_schema(args.schema)
         todo = given + (state.load_sources(veil.vault.cipher) if getattr(args, "refresh", False) else [])
         if not todo:
             raise SystemExit("usage: veil seed SOURCE... | veil seed --refresh")
@@ -316,7 +345,8 @@ def main(argv: list[str] | None = None) -> int:
             veil.ner = GlinerDetector()
         warm(veil.known)
         server = serve(veil, Policy(display_real=not args.show_tokens), args.port, args.upstream, args.capture,
-                       args.openai_upstream, args.bedrock_upstream, args.vertex_upstream)
+                       args.openai_upstream, args.bedrock_upstream, args.vertex_upstream,
+                       args.foundry_upstream, args.anthropic_aws_upstream)
         sources = state.load_sources(veil.vault.cipher)
         if sources and args.reseed_interval > 0:
             from .reseed import Reseeder
