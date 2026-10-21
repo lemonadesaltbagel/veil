@@ -3,8 +3,8 @@ class Veil < Formula
 
   desc "Privacy proxy for AI coding agents: models see pseudonyms, you keep real values"
   homepage "https://github.com/lemonadesaltbagel/veil"
-  url "https://files.pythonhosted.org/packages/67/61/be7b303b49c0319b0bc3af41498d75ee69f826c1f4e3ff8c9305edfbaf36/veil_proxy-0.1.2.tar.gz"
-  sha256 "41c113b13ba6b408837fb563701c89e872096a95d88ee7b82e9ca574ae2b65d6"
+  url "https://files.pythonhosted.org/packages/f0/13/e862d299b441dfce892a3dcea1a3e998e3052010359c542357521a23e73c/veil_proxy-0.2.0.tar.gz"
+  sha256 "5787abc67e1910e92e2775cd5de3b26c629dd828ef49cfa3fefe4896fc812db2"
 
   depends_on "cryptography"
   depends_on "python@3.14"
@@ -15,8 +15,8 @@ class Veil < Formula
   end
 
   resource "certifi" do
-    url "https://files.pythonhosted.org/packages/7e/eb/a2aa1ac3ea30dd3f30ca57f40232138b6b0040719316ecb85daf61167771/certifi-2026.10.18.tar.gz"
-    sha256 "b9995d97b64d0431a5af837d8ca8cd6238104d1f319f04bd93ea43124d6c861e"
+    url "https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz"
+    sha256 "035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae"
   end
 
   resource "h11" do
