@@ -58,7 +58,8 @@ veil-proxy = { workspace = true }
 name = "veil"
 
 [tool.pytest.ini_options]
-pythonpath = ["."]   # makes veil_dev importable for the test suite
+pythonpath = ["."]
+faulthandler_timeout = 120  # a hung test dumps every thread's stack (CI diagnosis)   # makes veil_dev importable for the test suite
 
 [build-system]
 # Pure-Python backend: building the sdist needs no compiler (Homebrew builds from source).

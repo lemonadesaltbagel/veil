@@ -131,4 +131,5 @@ jobs:
       - run: uv sync --locked
       - name: Tests (database tests skip when unreachable)
         shell: bash
-        run: uv run pytest -q -rs
+        timeout-minutes: 10  # fails the step (logs kept) instead of cancelling the job
+        run: uv run pytest -v -rs --durations=15
