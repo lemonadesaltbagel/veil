@@ -104,3 +104,32 @@ def strong_views(text: str) -> list[tuple[str, str]]:
 def deep_views(text: str) -> list[tuple[str, str]]:
     """Oracle for audits/red-team: strong views plus character-code sequences."""
     return strong_views(text) + [("w", norm(_codes(text))), ("c", norm_chars(_codes(text)))]
+
+
+# -- base64 (decoded instead of precomputed: a needle per value and alignment
+#    cost ~3 automaton entries per seeded value) ---------------------------------
+import binascii
+
+_B64RUN = re.compile(r"[A-Za-z0-9+/_-]{12,}={0,2}")
+_URLSAFE = str.maketrans("-_", "+/")
+WHOLE_BLOB = 4096  # longer runs are whole encoded blobs (images, files): decode from their start only
+
+
+def b64_runs(text: str) -> list[tuple[int, int, str]]:
+    """(start, end, decoded text) for each base64-looking run, decoded at every
+    alignment (a value can sit at any byte offset of the encoded payload)."""
+    out = []
+    for m in _B64RUN.finditer(text):
+        run = m.group().rstrip("=").translate(_URLSAFE)
+        if run.isalpha() and (run.islower() or run.isupper()):
+            continue  # a plain word, not data
+        parts = []
+        for k in ((0,) if len(run) > WHOLE_BLOB else (0, 1, 2, 3)):
+            chunk = run[k:]
+            chunk = chunk[:len(chunk) - len(chunk) % 4]
+            try:
+                parts.append(binascii.a2b_base64(chunk).decode("utf-8", "ignore"))
+            except binascii.Error:
+                pass
+        out.append((m.start(), m.end(), "\n".join(parts)))
+    return out

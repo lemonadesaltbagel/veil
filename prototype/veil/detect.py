@@ -161,12 +161,17 @@ class KnownValues:
     def __len__(self) -> int:
         return len(self._entries)
 
+    def matcher(self) -> Matcher:
+        """Every seeded value and encoded form (shared with the outbound guard)."""
+        if self._pattern is None:
+            self._pattern = Matcher([*self._entries, *self._aliases])
+            self._email_pattern = Matcher(self._emails_ci) if self._emails_ci else None
+        return self._pattern
+
     def find(self, text: str) -> list[Span]:
         if not self._entries:
             return []
-        if self._pattern is None:
-            self._pattern = Matcher(set(self._entries) | set(self._aliases))
-            self._email_pattern = Matcher(set(self._emails_ci)) if self._emails_ci else None
+        self.matcher()
         out = []
         found = [(a, b, n) for a, b, n in self._pattern.find(text)]
         if self._email_pattern is not None:  # case variants of known emails

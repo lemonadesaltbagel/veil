@@ -10,13 +10,16 @@ So the proxy re-seeds in the background:
 * when a fingerprint changes (or `full_every` seconds have passed) that source is
   re-seeded into a copy of the known values, which is then swapped in atomically,
   so requests never see a half-built set;
-* the result is persisted (known.enc) so hook processes see it too.
+* the result is persisted (known.enc) so hook processes see it too;
+* matcher and guard indexes are built in this thread before the swap, and the
+  interval stretches to 10x the last re-seed's duration (1.2M values: ~6 s).
 
 Sources are remembered encrypted (sources.enc): database URLs can carry passwords.
 """
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
@@ -25,8 +28,18 @@ import threading
 import time
 from urllib.parse import unquote, urlparse
 
+from .guard import seeded_index
 from .sources import seed
 from .sources.files import iter_files
+
+
+def warm(known) -> None:
+    """Build the matcher and guard indexes now, then exclude them from cyclic GC:
+    millions of long-lived tuples made full collections pause requests ~90 ms.
+    (Refcounting still frees them when a newer set replaces them.)"""
+    known.matcher()
+    seeded_index(known)
+    gc.freeze()
 
 
 def _digest(*parts) -> str:
@@ -89,6 +102,7 @@ class Reseeder(threading.Thread):
         self.last_full: dict[str, float] = {}
         self._stop = threading.Event()
         self.runs = 0
+        self.last_seconds = 0.0  # duration of the last pass that re-seeded something
 
     def stop(self) -> None:
         self._stop.set()
@@ -106,6 +120,7 @@ class Reseeder(threading.Thread):
             stale = now - self.last_full.get(src, 0) >= self.full_every
             if fp == self.prints.get(src) and not stale:
                 continue
+            started = time.monotonic()
             new = self.veil.known.copy()
             before = len(new)
             try:
@@ -115,11 +130,13 @@ class Reseeder(threading.Thread):
                 continue
             added = len(new) - before
             if added:
-                self.veil.known = new  # atomic swap; matchers rebuild on the size change
+                warm(new)  # build the indexes here, not on the next request (seconds at 1M values)
+                self.veil.known = new  # atomic swap
                 added_total += added
                 if self.on_swap:
                     self.on_swap()
             self.prints[src], self.last_full[src] = fp, now
+            self.last_seconds = time.monotonic() - started
             if added or first:
                 print(f"[veil] reseed: {_label(src)} +{added} values", file=self.log)
         if added_total and self.save:
@@ -133,7 +150,9 @@ class Reseeder(threading.Thread):
                 self.check_once()
             except Exception as e:  # never let the thread die
                 print(f"[veil] reseed error: {type(e).__name__}", file=self.log)
-            self._stop.wait(self.interval)
+            # A big source under constant writes would otherwise re-seed back to back:
+            # keep re-seeding under ~10% of one core.
+            self._stop.wait(max(self.interval, 10 * self.last_seconds))
 
 
 def _label(src: str) -> str:

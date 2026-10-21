@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import itertools
 import re
+import threading
 from typing import Any, Iterable
 
-from .detect import WORD, KnownValues, detect
+from .detect import KnownValues, detect
+from .match import Matcher
 from .vault import Vault
 
 
@@ -13,13 +16,60 @@ from .vault import Vault
 TOKEN_CODE = re.compile(r"(?:user_|User |First_|Last_|card_|secret_)([A-Za-z2-9]{4,6})|^([A-Za-z2-9]{4,6}) Example Street")
 
 
+class _Match:
+    __slots__ = ("_s", "_e", "_t")
+
+    def __init__(self, s: int, e: int, t: str):
+        self._s, self._e, self._t = s, e, t
+
+    def start(self) -> int:
+        return self._s
+
+    def end(self) -> int:
+        return self._e
+
+    def group(self, *_) -> str:
+        return self._t
+
+
+class TokenPattern:
+    """The vault's tokens as a regex-compatible matcher (finditer/findall/sub), with
+    the same boundaries as `(?<![WORD])token(?![WORD])`. A compiled alternation of
+    10k+ tokens costs ~150 ms to rebuild and is slow to scan; this grows incrementally."""
+
+    def __init__(self):
+        self.matcher = Matcher(())
+        self.count = 0
+        self.maxlen = 0
+
+    def grow(self, tokens) -> None:
+        tokens = list(tokens)
+        self.matcher = self.matcher.extended(tokens)
+        self.count += len(tokens)
+        self.maxlen = max([self.maxlen, *map(len, tokens)])
+
+    def finditer(self, text: str):
+        return [_Match(a, b, t) for a, b, t in self.matcher.find(text)]
+
+    def findall(self, text: str) -> list[str]:
+        return [t for _, _, t in self.matcher.find(text)]
+
+    def sub(self, repl, text: str) -> str:
+        out, pos = [], 0
+        for a, b, t in self.matcher.find(text):
+            out += [text[pos:a], repl(_Match(a, b, t)) if callable(repl) else repl]
+            pos = b
+        out.append(text[pos:])
+        return "".join(out)
+
+
 class Veil:
     def __init__(self, vault: Vault, known: KnownValues | None = None, ner=None):
         self.vault = vault
         self.known = known or KnownValues()
         self.ner = ner  # optional free-text detector (veil.ner.GlinerDetector)
-        self._rehydrate_re: re.Pattern | None = None
-        self._rehydrate_version = -1
+        self._tokens = TokenPattern()
+        self._tokens_lock = threading.Lock()
         self._codes: dict[str, list[str]] = {}
         self._codes_version = -1
 
@@ -47,17 +97,16 @@ class Veil:
         return "".join(out)
 
     # -- token -> real ---------------------------------------------------
-    def token_pattern(self) -> re.Pattern | None:
+    def token_pattern(self) -> TokenPattern | None:
         if hasattr(self.vault, "refresh"):
             self.vault.refresh()  # tokens other processes (hooks) allocated
-        if self._rehydrate_version != self.vault.version:
-            tokens = sorted(self.vault.tokens(), key=len, reverse=True)
-            self._rehydrate_re = (
-                re.compile(f"(?<![{WORD}])(?:{'|'.join(map(re.escape, tokens))})(?![{WORD}])")
-                if tokens else None
-            )
-            self._rehydrate_version = self.vault.version
-        return self._rehydrate_re
+        tp = self._tokens
+        if tp.count != len(self.vault._by_token):  # the vault only ever grows, in insertion order
+            with self._tokens_lock:
+                new = list(itertools.islice(self.vault._by_token, tp.count, None))
+                if new:
+                    tp.grow(new)
+        return tp if tp.count else None
 
     def tokens_in(self, text: str) -> set[str]:
         pattern = self.token_pattern()
@@ -69,7 +118,7 @@ class Veil:
             return text
         allowed = set(only) if only is not None else None
 
-        def sub(m: re.Match) -> str:
+        def sub(m) -> str:
             tok = m.group()
             if allowed is not None and tok not in allowed:
                 return tok

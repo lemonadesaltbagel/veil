@@ -6,7 +6,7 @@ uncovered key format). The guard doesn't care about structure: it walks every
 string in the final body and looks for
 
   * every real value veil knows (seeded + everything redacted so far), in plain
-    and encoded forms (URL, JSON-escaped, NFD, base64 at all 3 alignments);
+    and encoded forms (URL, JSON-escaped, NFD; base64 runs are decoded at every alignment);
   * pattern-detectable PII (emails, phones, cards, keys) anywhere outside
     signed thinking blocks.
 
@@ -17,15 +17,15 @@ record names the field path, kind and token -- never the real value.
 
 from __future__ import annotations
 
-import base64
+import bisect
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from .decode import norm, squash, strong_views, views
+from .decode import b64_runs, norm, squash, strong_views, views
 from .detect import WORD, detect, encoded_forms
 from .engine import Veil
-from .match import Matcher
+from .match import Matcher, Prefixes
 
 UNREPAIRABLE = ("thinking", "signature", "redacted_thinking")
 WITHHELD = ("[veil: output withheld - it contained personal data in an escaped/encoded form "
@@ -55,63 +55,66 @@ class Finding:
     allowed: bool = False
 
 
-def _b64_forms(value: str) -> set[str]:
-    """Substrings that appear in base64 of any text containing `value`,
-    whatever its byte offset (3 alignments, edge chars that mix with
-    neighbours trimmed)."""
-    raw = value.encode()
-    out = set()
-    for k in range(3):
-        enc = base64.b64encode(b"\0" * k + raw).decode().rstrip("=")
-        start = (0, 2, 3)[k]
-        core = enc[start:len(enc) - 2]
-        if len(core) >= 8:
-            out.add(core)
-    return out
-
-
 class _Index:
-    """All needle structures for one set of real values."""
+    """All needle structures for one set of real values. The seeded index shares the
+    redactor's dictionary matcher (same values, same encoded forms: building a second
+    copy doubled memory); the guard stays independent in *where* it looks."""
 
-    def __init__(self, values: dict[str, str]):
-        needles: dict[str, tuple[str, str, str]] = {}
-        for value, kind in values.items():
-            if len(value) < 4 and kind != "email":
-                continue
-            needles.setdefault(value, (value, kind, "plain"))
-            for f in encoded_forms(value, kind):
-                needles.setdefault(f, (value, kind, "encoded"))
-            if len(value) >= 6:
-                for f in _b64_forms(value):
-                    needles.setdefault(f, (value, kind, "base64"))
-        self.needles = needles
-        # base64 fragments sit inside runs of [A-Za-z0-9+/], so no word boundaries for them
-        self.matchers = [Matcher([n for n, (_, _, f) in needles.items() if f != "base64"]),
-                         Matcher([n for n, (_, _, f) in needles.items() if f == "base64"], bounded=False)]
+    def __init__(self, values: dict[str, str] | None = None, known=None):
+        if known is not None:
+            self.plain = known.matcher()
+            self.kind_of = lambda v: known._entries[v][0]
+            self._canonical = known.canonical
+            items = [(v, k) for v, (k, _) in known._entries.items()]
+        else:
+            values = {v: k for v, k in values.items() if len(v) >= 4 or k == "email"}
+            aliases = {}
+            for value, kind in values.items():
+                for f in encoded_forms(value, kind):
+                    aliases.setdefault(f, value)
+            self.plain = Matcher([*values, *aliases])
+            self.kind_of = values.__getitem__
+            self._canonical = lambda n: n if n in values else aliases.get(n)
+            items = list(values.items())
         # transformed copies (UPPER, s p a c e d, reversed, rot13, hex, url) of values >= 8 chars
         # mode 'w': word view (spaces kept); mode 'c': character view (spaces removed)
-        self.norm_values: dict[str, dict[str, tuple[str, str]]] = {"w": {}, "c": {}}
-        for value, kind in values.items():
+        self.norm_values: dict[str, dict[str, str]] = {"w": {}, "c": {}}
+        for value, kind in items:
             if len(squash(value)) >= 8:
-                self.norm_values["w"].setdefault(norm(value), (value, kind))
-                self.norm_values["c"].setdefault(squash(value), (value, kind))
-        self.norm = {m: Matcher(list(v), bounded=False) for m, v in self.norm_values.items()}
+                w, c = norm(value), squash(value)
+                w = value if w == value else w  # share the string (most emails, usernames)
+                self.norm_values["w"].setdefault(w, value)
+                self.norm_values["c"].setdefault(w if c == w else c, value)
+        # one automaton for both views (single-word values have the same needle in each)
+        both = Matcher([*self.norm_values["w"], *self.norm_values["c"]], bounded=False)
+        self.norm = {"w": both, "c": both}
         # Truncated values (cut -c, substr, fixed-width columns): a value's head ending
         # exactly at a line end, or its tail starting exactly at a line start.
-        self.heads, self.tails = {}, {}
-        for value, kind in values.items():
-            if len(value) >= 8 and kind in TRUNCATABLE:
-                for k in range(6, len(value)):
-                    self.heads.setdefault(value[:k], (value, kind))
-                    self.tails.setdefault(value[-k:], (value, kind))
-        self.partial = [Matcher(list(self.heads), bounded=False), Matcher(list(self.tails), bounded=False)]
+        cut = [v for v, kind in items if len(v) >= 8 and kind in TRUNCATABLE]
+        self.heads, self.tails = Prefixes(cut), Prefixes(cut, reverse=True)
+        self.tail_anchors = Matcher([v[-6:][::-1] for v in cut], bounded=False)  # reversed text
+        self.longest = max(map(len, cut), default=0)
+
+    def resolve(self, needle: str) -> tuple[str, str, str]:
+        """needle -> (real value, kind, form)"""
+        value = self._canonical(needle)
+        return value, self.kind_of(value), "plain" if needle == value else "encoded"
+
+
+def seeded_index(known) -> _Index:
+    """The guard index for a set of known values, cached on it. The re-seeder builds
+    it before swapping a new set in, so no request pays for the rebuild."""
+    cached = getattr(known, "_guard_index", None)
+    if cached is None or cached[0] != len(known):
+        cached = (len(known), _Index(known=known))
+        known._guard_index = cached
+    return cached[1]
 
 
 class Guard:
     def __init__(self, veil: Veil):
         self.veil = veil
         self._seeded: _Index | None = None   # big, rebuilt only when seeding changes
-        self._seeded_key = None
         self._found: _Index | None = None    # small: pattern-found values, rebuilt per new token
         self._found_key = None
 
@@ -120,18 +123,12 @@ class Guard:
         # NER guesses are redacted where they occur but never become global needles
         # (a mis-tagged "Claude Code" would otherwise be rewritten in system prompts).
         known = self.veil.known._entries
-        if self._seeded_key != len(known):
-            self._seeded = _Index({v: k for v, (k, _) in known.items()})
-            self._seeded_key = len(known)
+        self._seeded = seeded_index(self.veil.known)
         if self._found_key != (len(known), self.veil.vault.version):
             self._found = _Index({value: kind for (kind, value) in self.veil.vault._by_value
                                   if kind in PATTERN_KINDS and value not in known})
             self._found_key = (len(known), self.veil.vault.version)
         return [self._seeded, self._found]
-
-    @property
-    def _needles(self):  # introspection (benchmarks/tests)
-        return {**self._seeded.needles, **self._found.needles} if self._seeded else {}
 
     def _token(self, value: str, kind: str) -> str:
         entry = self.veil.known._entries.get(value)
@@ -177,7 +174,10 @@ class Guard:
             for mode, view in strong_views(s):
                 for ix in indexes:
                     for _, _, n in ix.norm[mode].find(view):
-                        value, kind = ix.norm_values[mode][n]
+                        value = ix.norm_values[mode].get(n)
+                        if value is None:
+                            continue  # the other view's needle
+                        kind = ix.kind_of(value)
                         if value in s:
                             continue  # verbatim: the plain pass below repairs it in place
                         findings.append(Finding(path, kind, "transformed", "[withheld]",
@@ -185,35 +185,60 @@ class Guard:
                         return s if frozen else WITHHELD
         for view in views(s):
             for ix in indexes:
-                hidden = [n for _, _, n in ix.matchers[0].find(view) if n not in s]
+                hidden = [n for _, _, n in ix.plain.find(view) if n not in s]
                 if hidden:
-                    value, kind, _ = ix.needles[hidden[0]]
+                    value, kind, _ = ix.resolve(hidden[0])
                     findings.append(Finding(path, kind, "escaped", "[withheld]", repaired=not frozen, allowed=frozen))
                     return s if frozen else WITHHELD
         hits: list[tuple[int, int, str, str, str]] = []  # start, end, replacement, kind, form
         for ix in indexes:
-            for matcher in ix.matchers:
-                for start, end, needle in matcher.find(s):
-                    value, kind, form = ix.needles[needle]
-                    tok = self._token(value, kind)
-                    hits.append((start, end, "[veil:base64-redacted]" if form == "base64" else tok, kind, form))
+            for start, end, needle in ix.plain.find(s):
+                value, kind, form = ix.resolve(needle)
+                hits.append((start, end, self._token(value, kind), kind, form))
+        runs = b64_runs(s) if len(s) >= 12 else []
+        if runs:  # one matcher pass over every run's decodings
+            starts, decoded, at = [], [], 0
+            for a, b, text in runs:
+                starts.append(at)
+                decoded.append(text)
+                at += len(text) + 1
+            joined = "\n".join(decoded)
+            for ix in indexes:
+                for x, y, needle in ix.plain.find(joined):
+                    a, b, _ = runs[bisect.bisect_right(starts, x) - 1]
+                    if y - x >= 6 and not any(p < b and a < q for p, q, *_ in hits):
+                        value, kind, _ = ix.resolve(needle)
+                        hits.append((a, b, "[veil:base64-redacted]", kind, "base64"))
         if content and not frozen and ("\n" in s or "\ufffd" in s):
             pattern = self.veil.token_pattern()
             tokens = [(m.start(), m.end()) for m in pattern.finditer(s)] if pattern else []
             # U+FFFD: a byte-wise cut (GNU `cut -b`, head -c) split a UTF-8 character
-            line_end = lambda i: i == len(s) or s[i] in "\r\n\ufffd"
-            line_start = lambda i: i == 0 or s[i - 1] in "\n\ufffd"
+            ends = [i for i, c in enumerate(s) if c in "\r\n\ufffd"] + [len(s)]
+            starts = [0] + [i + 1 for i, c in enumerate(s) if c in "\n\ufffd"]
             word = lambda c: c.isalnum() or c == "_"
+            free = lambda a, b: not any(x < b and a < y for x, y in tokens) and \
+                not any(x < b and a < y for x, y, *_ in hits)
+            rs = s[::-1]
             for ix in indexes:
-                for which, matcher in zip(("head", "tail"), ix.partial):
-                    table = ix.heads if which == "head" else ix.tails
-                    for a, b, n in matcher.find(s):
-                        ok = (line_end(b) and (a == 0 or not word(s[a - 1]))) if which == "head" else \
-                             (line_start(a) and (b == len(s) or not word(s[b])))
-                        # never inside veil's own tokens ("Ab12 Example Street" vs a surname "Streeting")
-                        if ok and table[n][0] not in s and not any(x < b and a < y for x, y in tokens) \
-                                and not any(x < b and a < y for x, y, *_ in hits):
-                            hits.append((a, b, PARTIAL, table[n][1], "partial"))
+                if not ix.longest:
+                    continue
+                candidates = []
+                for a in set(ix.plain.anchors(s)):  # head: from a value's start to a line end
+                    if a == 0 or not word(s[a - 1]):
+                        b = ends[bisect.bisect_left(ends, a)]
+                        candidates.append((a, b, ix.heads))
+                for r in set(ix.tail_anchors.anchors(rs)):  # tail: from a line start to a value's end
+                    b = len(s) - r
+                    if b == len(s) or not word(s[b]):
+                        a = starts[bisect.bisect_right(starts, b - 6) - 1]
+                        candidates.append((a, b, ix.tails))
+                for a, b, table in sorted(candidates):
+                    if not 6 <= b - a < ix.longest:
+                        continue
+                    value = table.owner(s[a:b])
+                    # never inside veil's own tokens ("Ab12 Example Street" vs a surname "Streeting")
+                    if value and value not in s and free(a, b):
+                        hits.append((a, b, PARTIAL, ix.kind_of(value), "partial"))
         if not frozen:
             for span in detect(s, None, self.veil.vault.is_token):
                 if not any(a < span.end and span.start < b for a, b, *_ in hits):

@@ -265,9 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(veil.rehydrate(sys.stdin.read()))
     elif args.cmd == "proxy":
         from .proxy import serve
+        from .reseed import warm
         if args.ner:
             from .ner import GlinerDetector
             veil.ner = GlinerDetector()
+        warm(veil.known)
         server = serve(veil, Policy(display_real=not args.show_tokens), args.port, args.upstream, args.capture,
                        args.openai_upstream, args.bedrock_upstream, args.vertex_upstream)
         sources = state.load_sources(veil.vault.cipher)

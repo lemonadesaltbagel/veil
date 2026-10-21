@@ -28,7 +28,7 @@ class TextHold:
         if pattern is None:
             cut, matches = len(buf), []
         else:
-            maxlen = max(map(len, self.veil.vault.tokens()))
+            maxlen = pattern.maxlen
             cut = len(buf) if final else max(0, len(buf) - maxlen)
             matches = [m for m in pattern.finditer(ctx + buf) if m.end() > len(ctx)]
             for m in matches:
