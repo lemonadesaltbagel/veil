@@ -1,6 +1,7 @@
 # veil
 
 [![PyPI](https://img.shields.io/pypi/v/veil-proxy)](https://pypi.org/project/veil-proxy/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![CI](https://github.com/lemonadesaltbagel/veil/actions/workflows/ci.yml/badge.svg)](https://github.com/lemonadesaltbagel/veil/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
@@ -305,7 +306,7 @@ received, and what the model replied.
 
 | Version | Date | Where | Notes |
 |---|---|---|---|
-| main | unreleased | this repository | Database tool for the agent (`veil mcp-db`, bound parameters), values escaped for the file they're written into, rare combinations of quasi-identifiers, git/DynamoDB/Snowflake/BigQuery sources, live SQL Server/Elasticsearch/DynamoDB in CI, delta re-seeding and grown indexes, team secrets via secrets managers. |
+| 0.3.0 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.3.0/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.3.0/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | First release under the **Apache-2.0** license. Database tool for the agent (`veil mcp-db`, bound parameters), values escaped for the file they're written into, rare combinations of quasi-identifiers, git/DynamoDB/Snowflake/BigQuery sources, live SQL Server/Elasticsearch/DynamoDB in CI, delta re-seeding and grown indexes, team secrets via secrets managers. |
 | 0.2.1 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.2.1/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.2.1/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Bug fix: the proxy's local HTTP server no longer does a reverse-DNS lookup of 127.0.0.1 when it starts. On some Macs (mDNS) that lookup stalls for 30 s or more, delaying `veil proxy` startup; it also caused intermittent CI hangs. |
 | 0.2.0 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.2.0/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.2.0/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Display modes (`veil display`, `reveal`, `share`, team-enforced pseudonyms), automatic re-seeding, scale to 1M+ seeded values, escaping for embedded languages (fuzzed), quasi-identifiers and direct identifiers, key rotation, per-project vaults, byte-cut truncation, CI with live databases. |
 | 0.1.2 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.2/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.2/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Same code as 0.1.1, built with a pure-Python backend (`flit_core`) so the source archive builds without a Rust toolchain; that is what Homebrew needs. The dev harness moved out of the package into `veil_dev/`. Verified with `brew install --build-from-source`, `brew test` and `brew audit --strict`. |
@@ -363,4 +364,6 @@ data comes from the [Chinook database](https://github.com/lerocha/chinook-databa
 
 ## License
 
-No license has been chosen yet.
+[Apache License 2.0](LICENSE). Vendored data keeps its own terms: the column-name dictionary in
+`veil/data/` is under the PostgreSQL License, and the word list there is public domain (see
+`veil/data/README.md`).

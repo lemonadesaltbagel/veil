@@ -34,7 +34,12 @@ Seeds from Postgres, MySQL/MariaDB, SQLite, SQL Server (native sensitivity label
 Elasticsearch/OpenSearch and fixture files, plus personal fields declared in code (Prisma, Django,
 Rails, SQLAlchemy, OpenAPI, protobuf), and re-seeds automatically when the data changes.
 
+Also seeds git history, DynamoDB (personal data inside keys), Snowflake and BigQuery (their privacy
+tags). `veil mcp-db` gives the agent a read-only database tool in which pseudonyms become **bound
+parameters**, so real values are never SQL text.
+
 ```sh
+veil init ~/code/myapp --mcp   # also register the database tool with Claude Code
 veil display tokens        # screen sharing: answers keep pseudonyms (veil display real to undo)
 veil quasi redact          # also pseudonymise rare cities, postal codes, birth dates, employers
 veil keys rotate           # re-encrypt the vault; --token-secret for new pseudonyms
@@ -46,5 +51,5 @@ proxy with `allowedProviders: ["customEndpoint"]`.
 
 Optional NER for free text: `pip install "veil-proxy[ner]"` then `veil ner-model fetch`.
 
-Status: alpha. Keys: macOS Keychain / Linux Secret Service (`secret-tool`) / Windows Credential
+License: Apache-2.0. Status: alpha. Keys: macOS Keychain / Linux Secret Service (`secret-tool`) / Windows Credential
 Manager, or `VEIL_VAULT_KEY` / `VEIL_TOKEN_SECRET` (base64). State: `~/.veil` (encrypted vault).

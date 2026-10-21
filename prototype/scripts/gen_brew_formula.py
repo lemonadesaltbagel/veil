@@ -57,6 +57,7 @@ def main() -> None:
   homepage "https://github.com/lemonadesaltbagel/veil"
   url "{args.url}"
   sha256 "{sha}"
+  license "Apache-2.0"
 
   depends_on "cryptography"
   depends_on "{args.python}"
