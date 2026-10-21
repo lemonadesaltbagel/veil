@@ -22,14 +22,14 @@ import subprocess
 import sys
 import tempfile
 
-from .detect import KnownValues
-from .engine import Veil
-from .sources import seed_environment, seed_sqlite
-from .testing import (EXTRA_REAL_VALUES, PROMPT, Recorder, make_app_log, start_mock_cloud, start_mock_llm, start_mock_responses,
+from veil.detect import KnownValues
+from veil.engine import Veil
+from veil.sources import seed_environment, seed_sqlite
+from veil_dev.testing import (EXTRA_REAL_VALUES, PROMPT, Recorder, make_app_log, start_mock_cloud, start_mock_llm, start_mock_responses,
                       start_proxy, write_captures)
-from .vault import Vault
+from veil.vault import Vault
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))  # prototype/
 CHINOOK = os.path.join(ROOT, "datasets", "chinook.sqlite")
 SDK_TOOLS = [
     {"name": "Bash", "description": "Run a read-only shell command in the working directory "
@@ -265,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     out = os.path.abspath(args.out or os.path.join(ROOT, "captures", f"audit_{args.driver}_{label}"))
     veil, real_values, ws = scenario(out)
     if args.ner:
-        from .ner import GlinerDetector
+        from veil.ner import GlinerDetector
         veil.ner = GlinerDetector()
     mock = None
     if args.upstream == "mock" and args.provider != "anthropic":

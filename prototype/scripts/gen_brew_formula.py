@@ -1,13 +1,15 @@
 """Generate packaging/homebrew/veil.rb from uv.lock (resource pins + sha256, no network).
 
-    uv run python scripts/gen_brew_formula.py --url <release sdist url> --sha256 <sdist sha256>
+    uv run python scripts/gen_brew_formula.py            # formula for the PyPI release of the current version
 
 Homebrew's own `cryptography` formula is used instead of building it (needs Rust).
 """
 
 import argparse
 import hashlib
+import json
 import os
+import subprocess
 import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,10 +30,18 @@ def core_closure(lock: dict) -> list[dict]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="https://github.com/lemonadesaltbagel/veil/releases/download/v0.1.0/veil_proxy-0.1.0.tar.gz")
+    ap.add_argument("--version", default=tomllib.load(open(os.path.join(ROOT, "pyproject.toml"), "rb"))["project"]["version"])
+    ap.add_argument("--url", help="sdist URL (default: the PyPI release of --version)")
     ap.add_argument("--sha256")
+    ap.add_argument("--python", default="python@3.14",
+                    help="must be a Python that Homebrew's `cryptography` formula is built for")
     args = ap.parse_args()
-    sdist = os.path.join(ROOT, "dist", "veil_proxy-0.1.0.tar.gz")
+    if not args.url:  # the published PyPI sdist: no GitHub release needed
+        meta = json.loads(subprocess.run(["curl", "-fsSL", f"https://pypi.org/pypi/veil-proxy/{args.version}/json"],
+                                         capture_output=True, text=True, check=True).stdout)
+        sd = next(f for f in meta["urls"] if f["packagetype"] == "sdist")
+        args.url, args.sha256 = sd["url"], sd["digests"]["sha256"]
+    sdist = os.path.join(ROOT, "dist", f"veil_proxy-{args.version}.tar.gz")
     sha = args.sha256 or (hashlib.sha256(open(sdist, "rb").read()).hexdigest() if os.path.exists(sdist) else "TODO")
     lock = tomllib.load(open(os.path.join(ROOT, "uv.lock"), "rb"))
     res = ""
@@ -49,7 +59,7 @@ def main() -> None:
   sha256 "{sha}"
 
   depends_on "cryptography"
-  depends_on "python@3.13"
+  depends_on "{args.python}"
 
 {res}  def install
     virtualenv_install_with_resources
@@ -65,7 +75,7 @@ def main() -> None:
 
   test do
     ENV["VEIL_HOME"] = testpath/".veil"
-    ENV["VEIL_VAULT_KEY"] = "dGVzdC12YXVsdC1rZXktMzItYnl0ZXMtbG9uZyEhISE="   # test-only keys: no keychain
+    ENV["VEIL_VAULT_KEY"] = "dGVzdC12YXVsdC1rZXktMzItYnl0ZXMtbG9uZyEhISE=" # test-only keys: no keychain
     ENV["VEIL_TOKEN_SECRET"] = "dGVzdC10b2tlbi1zZWNyZXQtMzItYnl0ZXMtbG9uZyE="
     assert_match "usage: veil", shell_output("#{{bin}}/veil --help")
     assert_match "user_", pipe_output("#{{bin}}/veil redact", "mail jane.roe@mailbox.org\\n")

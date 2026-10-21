@@ -19,10 +19,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
-from .anthropic import Policy
-from .detect import WORD
-from .engine import Veil
-from .proxy import make_handler
+from veil.anthropic import Policy
+from veil.detect import WORD
+from veil.engine import Veil
+from veil.proxy import make_handler
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 CWD = re.compile(r'(?:Primary working directory:\s*|"(?:live_cwd|cwd)":\s*")([^"\s\\]+)', re.I)
@@ -208,7 +208,7 @@ def start_mock_llm(db_path: str = "chinook.sqlite") -> ThreadingHTTPServer:
 def find_leaks(payload: str, values) -> list[str]:
     """Real values present in the payload, plainly or after undoing line wrapping /
     octal / hex / unicode escapes (identifier-bounded, like detection)."""
-    from .decode import views
+    from veil.decode import views
     texts = [payload]
     try:  # decode per JSON string so escapes inside values are seen as the model sees them
         strings = []
@@ -216,7 +216,7 @@ def find_leaks(payload: str, values) -> list[str]:
         texts += [v for s in strings for v in views(s)]
     except ValueError:
         texts += views(payload)
-    from .decode import deep_views, norm
+    from veil.decode import deep_views, norm
     found = {v for v in values for t in texts if re.search(f"(?<![{WORD}]){re.escape(v)}(?![{WORD}])", t)}
     # transformed forms (reversed, rot13, upper-cased, spaced out, hex, url, char codes)
     deep = [d for t in texts for d in deep_views(t)]
@@ -434,7 +434,7 @@ def start_mock_responses(db_path: str = "chinook.sqlite") -> ThreadingHTTPServer
 def start_mock_cloud(db_path: str = "chinook.sqlite") -> ThreadingHTTPServer:
     """Speaks Bedrock (`/model/{id}/invoke-with-response-stream`, binary eventstream) and
     Vertex (`...:streamRawPredict`, SSE) with the same scripted model as start_mock_llm."""
-    from . import cloud
+    from veil import cloud
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"

@@ -8,7 +8,7 @@ from veil.anthropic import Policy
 from veil.detect import KnownValues
 from veil.engine import Veil
 from veil.responses import ItemRehydrator, ResponsesStreamRewriter, redact_responses_request
-from veil.testing import _responses_sse
+from veil_dev.testing import _responses_sse
 from veil.vault import Vault
 
 REAL = {"leonekohler@surfeu.de": "email", "Leonie Köhler": "name", "Theodor-Heuss-Straße 34": "address"}

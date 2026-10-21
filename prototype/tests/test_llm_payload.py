@@ -12,8 +12,8 @@ import os
 
 import pytest
 
-from veil.audit import CHINOOK, run_sdk, scenario
-from veil.testing import Recorder, start_mock_llm, start_proxy, write_captures
+from veil_dev.audit import CHINOOK, run_sdk, scenario
+from veil_dev.testing import Recorder, start_mock_llm, start_proxy, write_captures
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "captures", "sdk")
 pytestmark = pytest.mark.skipif(not os.path.exists(CHINOOK), reason="datasets/chinook.sqlite not downloaded")

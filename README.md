@@ -151,6 +151,13 @@ pip install veil-proxy                 # core: httpx, cryptography, pyahocorasic
 pip install "veil-proxy[postgres]"     # extras: postgres, mysql, mongo, redis, bedrock, ner, all
 ```
 
+Or with Homebrew (macOS/Linux):
+
+```sh
+brew install lemonadesaltbagel/veil/veil
+brew services start veil               # optional: keep the proxy running on 127.0.0.1:8787
+```
+
 Or from source (requires [uv](https://docs.astral.sh/uv/)):
 
 ```sh
@@ -206,7 +213,7 @@ scripts/dev_dbs.sh start                  # local Postgres (Docker) + MariaDB/Re
 uv run veil audit                         # real Claude Code -> veil -> scripted model; reports what the model saw
 uv run veil audit --driver codex          # real Codex CLI (also: --provider bedrock|vertex, --driver openai|sdk)
 uv run veil audit --upstream https://api.deepseek.com/anthropic --api-key-env DEEPSEEK_API_KEY --model deepseek-flash
-uv run python -m veil.redteam             # the 20-technique bypass matrix
+uv run python -m veil_dev.redteam             # the 20-technique bypass matrix
 uv run python scripts/eval_ai4privacy.py  # free-text leak rates: patterns / +NER / seeded
 ```
 
@@ -217,11 +224,12 @@ received, and what the model replied.
 
 | Version | Date | Where | Notes |
 |---|---|---|---|
+| 0.1.2 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.2/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.2/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Same code as 0.1.1, built with a pure-Python backend (`flit_core`) so the source archive builds without a Rust toolchain; that is what Homebrew needs. The dev harness moved out of the package into `veil_dev/`. Verified with `brew install --build-from-source`, `brew test` and `brew audit --strict`. |
 | 0.1.1 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.1.1/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.1/) | First PyPI release. The same files went to TestPyPI first as a final dry run, then to PyPI; both were verified byte-identical to the inspected build. |
 | 0.1.0 | 2026-10-20 | [TestPyPI](https://test.pypi.org/project/veil-proxy/0.1.0/) only | Packaging dry run: verified the runtime-only contents, a clean install from the index, and the console scripts. Never published to PyPI. |
 
 Every release ships only the runtime package (`veil/`). Tests, scripts, datasets and the audit
-harness stay in this repository.
+harness (`veil_dev/`) stay in this repository.
 
 ## Limitations
 
@@ -250,6 +258,7 @@ docs/RESEARCH.md     landscape, interception points, findings from every test ro
 docs/DESIGN.md       architecture, token scheme, tool policy, guard, adapters, threat model
 docs/DATABASES.md    seeding: implemented sources, classification signals, other database families
 prototype/veil/      the package (proxy, engine, guard, seeders, API adapters, CLI)
+prototype/veil_dev/  development harness: audits, fake models, bypass matrix (not packaged)
 prototype/tests/     test suite
 prototype/scripts/   dev databases, dataset fetch, evaluation, Homebrew formula generator
 ```

@@ -6,7 +6,7 @@ runs, its output is sent through the full request pipeline (redaction +
 outbound guard) and the final payload is scanned for real values -- whole,
 decoded, and partial (email local parts, 8-char pieces of names/secrets).
 
-    uv run python -m veil.redteam          # prints the matrix, writes captures/redteam/REPORT.md
+    uv run python -m veil_dev.redteam          # prints the matrix, writes captures/redteam/REPORT.md
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ import os
 import subprocess
 import sys
 
-from .anthropic import Policy, redact_request, rehydrate_tool_input
-from .guard import Guard
-from .testing import find_leaks
+from veil.anthropic import Policy, redact_request, rehydrate_tool_input
+from veil.guard import Guard
+from veil_dev.testing import find_leaks
 
 TECHNIQUES = [
     ("baseline: cat", "cat app.log"),
@@ -91,7 +91,7 @@ def run_matrix(veil, real_values: list[str], ws: str) -> list[dict]:
 
 
 def main() -> int:
-    from .audit import ROOT, scenario
+    from veil_dev.audit import ROOT, scenario
     out = os.path.join(ROOT, "captures", "redteam")
     veil, real_values, ws = scenario(out)
     rows = run_matrix(veil, real_values, ws)

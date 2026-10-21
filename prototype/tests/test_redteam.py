@@ -6,8 +6,8 @@ import shutil
 
 import pytest
 
-from veil.audit import CHINOOK, scenario
-from veil.redteam import TECHNIQUES, run_matrix
+from veil_dev.audit import CHINOOK, scenario
+from veil_dev.redteam import TECHNIQUES, run_matrix
 
 pytestmark = pytest.mark.skipif(not (os.path.exists(CHINOOK) and shutil.which("sqlite3") and shutil.which("rev")),
                                 reason="needs datasets/chinook.sqlite, sqlite3, rev")

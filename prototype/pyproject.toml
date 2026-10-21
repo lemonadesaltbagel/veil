@@ -1,6 +1,6 @@
 [project]
 name = "veil-proxy"
-version = "0.1.1"
+version = "0.1.2"
 description = "Privacy middleware for AI coding agents: the model sees consistent pseudonyms, your machine keeps the real values"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,16 +51,15 @@ dev = [
 [tool.uv.sources]
 veil-proxy = { workspace = true }
 
-# Ship only the runtime package. Not shipped: tests, scripts, datasets, captures, models, and the
-# dev-only harness modules (audit/testing/redteam need the sample datasets from a source checkout).
-[tool.uv.build-backend]
-module-name = "veil"
-module-root = ""
-source-include = ["README.md"]
-source-exclude = ["tests", "scripts", "datasets", "captures", "models", "packaging", "demo", "dist",
-                  "veil/testing.py", "veil/audit.py", "veil/redteam.py", "**/__pycache__", "**/.DS_Store"]
-wheel-exclude = ["veil/testing.py", "veil/audit.py", "veil/redteam.py", "**/__pycache__", "**/.DS_Store"]
+# Ship only the runtime package `veil/`. Development tooling lives in `veil_dev/` (audits, fake models,
+# bypass matrix) next to tests/, scripts/ and datasets/, none of which are packaged.
+[tool.flit.module]
+name = "veil"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]   # makes veil_dev importable for the test suite
 
 [build-system]
-requires = ["uv_build>=0.12,<0.13"]
-build-backend = "uv_build"
+# Pure-Python backend: building the sdist needs no compiler (Homebrew builds from source).
+requires = ["flit_core>=3.12,<4"]
+build-backend = "flit_core.buildapi"

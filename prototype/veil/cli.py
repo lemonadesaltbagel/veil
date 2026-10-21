@@ -142,8 +142,10 @@ def _service(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["audit"]:
-        try:
-            from .audit import main as audit_main
+        try:  # dev harness: only in a source checkout (prototype/veil_dev), never in the package
+            import os
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from veil_dev.audit import main as audit_main
         except ImportError:
             print("veil audit is a development tool: run it from a source checkout (it needs the sample datasets)",
                   file=sys.stderr)

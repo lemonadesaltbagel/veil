@@ -3,11 +3,11 @@ class Veil < Formula
 
   desc "Privacy proxy for AI coding agents: models see pseudonyms, you keep real values"
   homepage "https://github.com/lemonadesaltbagel/veil"
-  url "https://github.com/lemonadesaltbagel/veil/releases/download/v0.1.0/veil_proxy-0.1.0.tar.gz"
-  sha256 "a0d5ae19a8f99c545a5c2dd4f80b01be474bdcc7428a042c9b54fc4a2571dcf4"
+  url "https://files.pythonhosted.org/packages/67/61/be7b303b49c0319b0bc3af41498d75ee69f826c1f4e3ff8c9305edfbaf36/veil_proxy-0.1.2.tar.gz"
+  sha256 "41c113b13ba6b408837fb563701c89e872096a95d88ee7b82e9ca574ae2b65d6"
 
   depends_on "cryptography"
-  depends_on "python@3.13"
+  depends_on "python@3.14"
 
   resource "anyio" do
     url "https://files.pythonhosted.org/packages/a9/d2/f4d173e22df740bc37b1db102b386ba719b66e95b0f0d751f556b387e6d2/anyio-4.15.1.tar.gz"
@@ -63,7 +63,7 @@ class Veil < Formula
 
   test do
     ENV["VEIL_HOME"] = testpath/".veil"
-    ENV["VEIL_VAULT_KEY"] = "dGVzdC12YXVsdC1rZXktMzItYnl0ZXMtbG9uZyEhISE="   # test-only keys: no keychain
+    ENV["VEIL_VAULT_KEY"] = "dGVzdC12YXVsdC1rZXktMzItYnl0ZXMtbG9uZyEhISE=" # test-only keys: no keychain
     ENV["VEIL_TOKEN_SECRET"] = "dGVzdC10b2tlbi1zZWNyZXQtMzItYnl0ZXMtbG9uZyE="
     assert_match "usage: veil", shell_output("#{bin}/veil --help")
     assert_match "user_", pipe_output("#{bin}/veil redact", "mail jane.roe@mailbox.org\n")
