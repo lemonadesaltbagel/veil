@@ -15,7 +15,7 @@ DSH = "127.0.0.1,localhost,::1,[::1],127.0.0.1,localhost"
 def test_bracketed_ipv6_breaks_httpx_and_normalizing_fixes_it(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
     monkeypatch.setenv("NO_PROXY", DSH)
-    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setenv("no_proxy", DSH)                   # one variable on Windows: set both, delete neither
     with pytest.raises(httpx.InvalidURL):
         httpx.Client()                                    # what crashed `veil proxy` under dsh
     normalize_no_proxy()
