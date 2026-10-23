@@ -154,7 +154,7 @@ class SQLSource:
             self.conn = pymysql.connect(host=u.hostname or "127.0.0.1", port=u.port or 3306,
                                         user=unquote(u.username or "root"), password=unquote(u.password or ""),
                                         database=u.path.lstrip("/"), autocommit=True, charset="utf8mb4",
-                                        connect_timeout=10)
+                                        connect_timeout=10, read_timeout=60, write_timeout=60)
             with self.conn.cursor() as c:
                 c.execute("SET SESSION TRANSACTION READ ONLY")
                 for limit in ("SET SESSION MAX_EXECUTION_TIME = 30000",  # MySQL (ms)

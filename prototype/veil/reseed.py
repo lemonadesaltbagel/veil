@@ -63,7 +63,8 @@ def fingerprint(source: str) -> str:
     if u.scheme in ("mysql", "mariadb"):
         import pymysql
         c = pymysql.connect(host=u.hostname or "127.0.0.1", port=u.port or 3306, user=unquote(u.username or "root"),
-                            password=unquote(u.password or ""), database=u.path.lstrip("/"), connect_timeout=5)
+                            password=unquote(u.password or ""), database=u.path.lstrip("/"), connect_timeout=5,
+                            read_timeout=5, write_timeout=5)  # connect_timeout doesn't cover the handshake
         try:
             with c.cursor() as cur:
                 try:

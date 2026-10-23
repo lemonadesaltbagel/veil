@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import socket
 import sqlite3
 import time
 import uuid
@@ -84,6 +85,17 @@ LIVE = {
     "redis": "redis://127.0.0.1:56379/0",
     "mongo": "mongodb://127.0.0.1:57017/sample_mflix",
 }
+
+
+def test_a_mysql_server_that_never_answers_does_not_hang():
+    # seen on a Windows CI runner: something accepted the connection on the MySQL port but
+    # never sent the handshake, and pymysql (no read timeout) waited until the job timed out
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0)); srv.listen(1)
+        t0 = time.monotonic()
+        with pytest.raises(Exception):
+            fingerprint(f"mysql://root@127.0.0.1:{srv.getsockname()[1]}/app")
+        assert time.monotonic() - t0 < 30
 
 
 @pytest.mark.parametrize("kind", list(LIVE))

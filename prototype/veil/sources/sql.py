@@ -207,7 +207,8 @@ def seed_mysql(known: KnownValues, host: str, user: str, password: str, database
     import pymysql
 
     conn = pymysql.connect(host=host, port=port, user=user, password=password, database=database,
-                           cursorclass=pymysql.cursors.DictCursor, charset="utf8mb4", connect_timeout=10)
+                           cursorclass=pymysql.cursors.DictCursor, charset="utf8mb4", connect_timeout=10,
+                           read_timeout=300, write_timeout=300)
     with conn.cursor() as cur:
         cur.execute("SET SESSION TRANSACTION READ ONLY")
         cur.execute("""SELECT TABLE_NAME t, COLUMN_NAME c, DATA_TYPE d, COLUMN_KEY k, COLUMN_COMMENT m
