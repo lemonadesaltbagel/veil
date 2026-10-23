@@ -414,6 +414,8 @@ def serve(veil: Veil, policy: Policy, port: int = 8787, upstream: str = "https:/
           capture: str | None = None, openai_upstream: str | None = None, bedrock_upstream: str | None = None,
           vertex_upstream: str | None = None, foundry_upstream: str | None = None,
           anthropic_aws_upstream: str | None = None):
+    from .netenv import normalize_no_proxy
+    normalize_no_proxy()
     client = httpx.Client(timeout=httpx.Timeout(600, connect=10))
     observer = capture_observer(capture) if capture else None
     server = LocalHTTPServer(("127.0.0.1", port), make_handler(veil, policy, upstream, client,

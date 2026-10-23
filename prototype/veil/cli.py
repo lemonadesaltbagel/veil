@@ -256,6 +256,8 @@ def _service(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    from .netenv import normalize_no_proxy
+    normalize_no_proxy()  # before any httpx client: one unparseable NO_PROXY entry makes them all raise
     if argv[:1] == ["audit"]:
         try:  # dev harness: only in a source checkout (prototype/veil_dev), never in the package
             import os
