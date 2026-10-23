@@ -16,7 +16,10 @@ def hook_response(veil, kind: str, event: dict) -> dict | None:
             return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": redacted}}
     else:
         original = event.get("tool_input", {})
-        updated = rehydrate_tool_input(veil, Policy(), event.get("tool_name", ""), original)
+        from .anthropic import configured_aliases
+        from .state import config
+        policy = Policy(tool_aliases=configured_aliases(config()))
+        updated = rehydrate_tool_input(veil, policy, event.get("tool_name", ""), original)
         if updated != original:
             return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": updated}}
     return None

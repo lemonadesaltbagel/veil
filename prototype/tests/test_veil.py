@@ -273,3 +273,21 @@ def test_fragment_searches(veil):
     pat = out["pattern"]
     assert pat.startswith("(?:") and "Alice Wong" in pat and "alice_w" in pat and pat.endswith("|refund")
     assert "alice@acme\\-corp\\.com" in pat  # Rust-regex-safe escaping
+
+
+def test_a_fragment_of_a_phone_pseudonym_never_becomes_a_new_value():
+    # seen with a real model: it searched LIKE '%408-555-0133%' for the pseudonym
+    # +1-408-555-0133; re-redacting that history created a second pseudonym, and the
+    # developer was later shown the first pseudonym instead of the real phone
+    known = KnownValues(min_len=1)
+    known.add("+49 0711 2842222", "phone", "c:2")
+    veil = Veil(Vault(":memory:", b"phone"), known)
+    tok = veil.redact("call +49 0711 2842222")[5:]
+    assert tok.startswith("+1-") and "555-01" in tok
+    piece = tok[3:]                                            # e.g. 408-555-0133
+    history = f"sqlite3 app.db \"select * from Customer where Phone LIKE '%{piece}%'\""
+    assert veil.redact(history) == history                     # not a new phone
+    assert veil.rehydrate(f"phone `{tok}`") == "phone `+49 0711 2842222`"
+    seeded = KnownValues(); seeded.add("+1 650-555-0199", "phone", "c:9")   # a real (sample) value in that range
+    v2 = Veil(Vault(":memory:", b"s"), seeded)
+    assert "650-555-0199" not in v2.redact("ticket for +1 650-555-0199")    # seeded: still matched exactly

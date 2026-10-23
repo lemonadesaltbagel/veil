@@ -197,28 +197,6 @@ def run_codex(proxy_url: str, api_key: str, model: str | None, ws: str, max_turn
     return (p.stdout.strip() or p.stderr[-2000:]), []
 
 
-def run_dsh(proxy_url: str, api_key: str, model: str | None, ws: str, max_turns: int = 15) -> tuple[str, list]:
-    """Real DeepSeek Harness (`dsh --profile headless`) in an isolated DSH_HOME; its DeepSeek
-    adapter speaks Anthropic Messages to DEEPSEEK_BASE_URL, which points at veil."""
-    dsh = os.environ.get("VEIL_DSH") or shutil.which("dsh")
-    if not dsh:
-        raise SystemExit("dsh not found: npm install -g @deepseek-ai/dsh, or set VEIL_DSH to its path")
-    home = tempfile.mkdtemp(prefix="veil-dsh-home-")
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("DEEPSEEK", "DSH_"))
-           and k.lower() not in ("http_proxy", "https_proxy", "all_proxy")}
-    env.update({"DSH_HOME": home, "DEEPSEEK_BASE_URL": proxy_url, "DEEPSEEK_API_KEY": api_key,
-                "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"})
-    try:
-        p = subprocess.run([dsh, "--profile", "headless", PROMPT], cwd=ws, env=env, stdin=subprocess.DEVNULL,
-                           capture_output=True, text=True, timeout=900)
-    finally:
-        shutil.rmtree(home, ignore_errors=True)
-    for name, data in (("dsh_stdout.txt", p.stdout), ("dsh_stderr.txt", p.stderr)):
-        with open(os.path.join(os.path.dirname(ws), name), "w") as f:
-            f.write(data)
-    return (p.stdout.strip() or p.stderr[-2000:]), []
-
-
 def run_claude(proxy_url: str, api_key: str, model: str | None, ws: str, max_turns: int = 15,
                provider: str = "anthropic") -> tuple[str, list]:
     config_dir = tempfile.mkdtemp(prefix="veil-claude-config-")
@@ -280,7 +258,7 @@ def _load_env_key(name: str) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="veil audit")
-    p.add_argument("--driver", choices=["claude", "sdk", "openai", "codex", "dsh"], default="claude")
+    p.add_argument("--driver", choices=["claude", "sdk", "openai", "codex"], default="claude")
     p.add_argument("--provider", choices=["anthropic", "bedrock", "vertex", "foundry", "anthropic-aws"], default="anthropic",
                    help="claude driver: which API format Claude Code speaks to veil")
     p.add_argument("--upstream", default="mock", help="'mock' (offline fake LLM) or an Anthropic-format base URL")
@@ -326,8 +304,6 @@ def main(argv: list[str] | None = None) -> int:
             final, executed = run_openai(proxy_url, api_key, model, ws, args.max_turns)
         elif args.driver == "codex":
             final, executed = run_codex(proxy_url, api_key, model, ws, args.max_turns)
-        elif args.driver == "dsh":
-            final, executed = run_dsh(proxy_url, api_key, model, ws, args.max_turns)
         else:
             final, executed = run_claude(proxy_url, api_key, model, ws, args.max_turns, args.provider)
     finally:

@@ -190,7 +190,6 @@ One proxy serves all of them, routed by path:
 | Claude Code on Google Vertex | Vertex rawPredict | `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:8787/v1`, `CLAUDE_CODE_SKIP_VERTEX_AUTH=1` |
 | Claude Code on Microsoft Foundry | Anthropic Messages | `CLAUDE_CODE_USE_FOUNDRY=1`, `ANTHROPIC_FOUNDRY_BASE_URL=http://127.0.0.1:8787/foundry` (proxy: `--foundry-upstream https://RESOURCE.services.ai.azure.com/anthropic`) |
 | Claude Code on Claude Platform on AWS | Anthropic Messages | `CLAUDE_CODE_USE_ANTHROPIC_AWS=1`, `ANTHROPIC_AWS_BASE_URL=http://127.0.0.1:8787/anthropic-aws`, `ANTHROPIC_AWS_WORKSPACE_ID=…` (proxy: `--anthropic-aws-upstream https://aws-external-anthropic.REGION.api.aws`) |
-| DeepSeek Harness (`dsh`) | Anthropic Messages | `DEEPSEEK_BASE_URL=http://127.0.0.1:8787` (proxy: `--upstream https://api.deepseek.com/anthropic`) |
 | Codex CLI | OpenAI Responses | provider with `base_url = "http://127.0.0.1:8787/v1"`, `wire_api = "responses"` |
 | Aider, Continue, OpenAI SDK, LiteLLM | OpenAI Chat Completions | `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` |
 
@@ -207,15 +206,22 @@ Cloud credentials:
   taken from the host and isn't documented; override it with `VEIL_ANTHROPIC_AWS_SIGV4_SERVICE` if
   needed.
 
-Every row has been exercised end to end with a real client (Claude Code 2.1.285, DeepSeek Harness
-0.2.1-rc.2, Codex CLI, or the OpenAI SDK) through veil against a faithful fake upstream, with 0 leaks.
-DeepSeek Harness was also run against the real DeepSeek API: 9 requests, 0 leaks, and the correct
-diagnosis. None of the cloud rows has been run against a live cloud account yet.
+Every row has been exercised end to end with a real client (Claude Code 2.1.285, Codex CLI, or the
+OpenAI SDK) through veil against a faithful fake upstream, with 0 leaks. None of the cloud rows has
+been run against a live cloud account yet.
 
-DeepSeek Harness tools (`bash`, `read`, `grep`, `glob`, `edit`, `write`, `str_replace_editor`,
-`working_directory`) get the same restore rules as Claude Code's, because they share argument
-names. Its other tools (`run_code`, `workflow`, `pwsh`, `subagent`, `web_*`, terminals) never receive
-real values.
+**Other agents' tool names.** Real values reach a tool call only through tools veil knows by name
+(Claude Code's `Bash`, `Read`, `Edit`, …, and Anthropic's `str_replace_editor`). An agent whose tools
+take the same arguments under other names can map them onto veil's roles, and every other tool of
+that agent still gets pseudonyms only:
+
+```bash
+veil proxy --tool-alias bash=Bash --tool-alias read=Read     # or VEIL_TOOL_ALIASES="bash=Bash,read=Read"
+```
+
+The roles are `Bash`, `Read`, `Grep`, `Glob`, `LS`, `Edit`, `MultiEdit`, `Write` and `NotebookEdit`;
+`config.json` can hold them as `"tool_aliases": {"bash": "Bash"}`. The DeepSeek Harness plugin
+[dsh-veil](https://github.com/lemonadesaltbagel/dsh-veil) starts veil this way.
 
 ## Teams
 
@@ -381,7 +387,6 @@ scripts/dev_dbs.sh start                  # local Postgres, MariaDB, Redis, Mong
 uv run veil audit                         # real Claude Code -> veil -> scripted model; reports what the model saw
 uv run veil audit --driver codex          # real Codex CLI (also: --driver openai|sdk)
 uv run veil audit --provider foundry      # also: bedrock | vertex | anthropic-aws
-uv run veil audit --driver dsh            # real DeepSeek Harness (npm i -g @deepseek-ai/dsh)
 uv run veil audit --upstream https://api.deepseek.com/anthropic --api-key-env DEEPSEEK_API_KEY --model deepseek-flash
 uv run python -m veil_dev.redteam         # the 21-technique bypass matrix
 uv run python -m veil_dev.shellfuzz --cases 10000   # executes fuzzed commands; any code execution fails
@@ -423,7 +428,7 @@ veil is alpha software. We'd rather you know exactly where its edges are:
 
 | Version | Date | Where | Notes |
 |---|---|---|---|
-| main | unreleased | this repository | DeepSeek Harness support (tool policy, `veil audit --driver dsh`, CI); a fragment of a phone pseudonym is no longer re-pseudonymised. |
+| 0.3.1 | 2026-10-23 | [PyPI](https://pypi.org/project/veil-proxy/0.3.1/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.3.1/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Tool aliases (`--tool-alias`, `VEIL_TOOL_ALIASES`, `config.json`) give another agent's tools veil's restore rules; Anthropic's `str_replace_editor` is restored like Write/Edit. Fix: a fragment of a phone pseudonym (a model searching `LIKE '%408-555-0133%'`) was pseudonymised again, so the developer was shown a pseudonym instead of the real number. `veil mcp-db` sets a 30 s statement timeout on MySQL/MariaDB. Audits fail when the client sent no requests. |
 | 0.3.0 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.3.0/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.3.0/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | First release under the **Apache-2.0** license. Database tool for the agent (`veil mcp-db`, bound parameters), values escaped for the file they're written into, rare combinations of quasi-identifiers, git/DynamoDB/Snowflake/BigQuery sources, live SQL Server/Elasticsearch/DynamoDB in CI, delta re-seeding and grown indexes, team secrets via secrets managers. |
 | 0.2.1 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.2.1/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.2.1/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Bug fix: the proxy's local HTTP server no longer does a reverse-DNS lookup of 127.0.0.1 when it starts. On some Macs (mDNS) that lookup stalls for 30 s or more, delaying `veil proxy` startup; it also caused intermittent CI hangs. |
 | 0.2.0 | 2026-10-21 | [PyPI](https://pypi.org/project/veil-proxy/0.2.0/), [TestPyPI](https://test.pypi.org/project/veil-proxy/0.2.0/), [Homebrew tap](https://github.com/lemonadesaltbagel/homebrew-veil) | Display modes (`veil display`, `reveal`, `share`, team-enforced pseudonyms), automatic re-seeding, scale to 1M+ seeded values, escaping for embedded languages (fuzzed), quasi-identifiers and direct identifiers, key rotation, per-project vaults, byte-cut truncation, CI with live databases. |

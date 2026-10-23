@@ -1,12 +1,12 @@
-"""DeepSeek Harness (dsh) tools: same argument names as Claude Code's, lowercase names.
-veil applies the same policies through aliases; unknown dsh tools get no real values."""
+"""Tool aliases: another agent's tools that take Claude Code's argument names get the same
+policies under their own names (config, env or --tool-alias). Unaliased tools get no real values."""
 
 import subprocess
 import sys
 
 import pytest
 
-from veil.anthropic import Policy, rehydrate_tool_input
+from veil.anthropic import Policy, configured_aliases, parse_aliases, rehydrate_tool_input
 from veil.detect import KnownValues
 from veil.engine import Veil
 from veil.vault import Vault
@@ -18,11 +18,27 @@ REAL, HOSTILE = "leonekohler@surfeu.de", "x'; touch PWNED; echo '"
 def veil():
     k = KnownValues(min_len=1)
     k.add(REAL, "email", "c:2"); k.add("O'Brien", "name", "c:3"); k.add(HOSTILE, "name", "c:4")
-    return Veil(Vault(":memory:", b"dsh"), k)
+    return Veil(Vault(":memory:", b"alias"), k)
 
 
-def rt(veil, tool, args):
-    return rehydrate_tool_input(veil, Policy(), tool, args)
+ALIASES = parse_aliases("bash=Bash,read=Read,grep=Grep,glob=Glob,edit=Edit,write=Write,working_directory=Read")
+
+
+def rt(veil, tool, args, aliases=ALIASES):
+    return rehydrate_tool_input(veil, Policy(tool_aliases=aliases), tool, args)
+
+
+def test_aliases_come_from_config_env_and_flags(monkeypatch):
+    monkeypatch.setenv("VEIL_TOOL_ALIASES", "shell=Bash; cat=Read")
+    got = configured_aliases({"tool_aliases": {"shell": "Read", "view": "Read"}}, "cat=Grep")
+    assert got == {"shell": "Bash", "view": "Read", "cat": "Grep"}            # later sources win
+    with pytest.raises(ValueError, match="role must be one of"):
+        parse_aliases({"run": "mcp__veil_db__query"})                         # only veil's own roles
+
+
+def test_unaliased_names_get_nothing(veil):
+    tok = veil.redact(REAL)
+    assert rt(veil, "read", {"file_path": f"/data/{tok}.json"}, {})["file_path"] == f"/data/{tok}.json"
 
 
 def test_bash_gets_shell_escaping(veil, tmp_path):
@@ -69,23 +85,8 @@ def test_str_replace_editor(veil, tmp_path):
     ("run_code", {"code": "print('{t}')"}), ("workflow", {"script": "x('{t}')"}), ("pwsh", {"command": "echo {t}"}),
     ("subagent", {"prompt": "email {t}"}), ("web_fetch", {"url": "https://x.io/?e={t}"}),
     ("terminal_send", {"input": "{t}"}), ("send_message", {"message": "{t}"})])
-def test_other_dsh_tools_get_no_real_values(veil, tool, args):
+def test_other_tools_get_no_real_values(veil, tool, args):
     tok = veil.redact(REAL)
     out = rt(veil, tool, {k: v.format(t=tok) for k, v in args.items()})
     assert REAL not in str(out) and tok in str(out)
 
-
-def test_a_fragment_of_a_phone_pseudonym_never_becomes_a_new_value(veil):
-    # seen with real DeepSeek through dsh: the model searched LIKE '%408-555-0133%' for the
-    # pseudonym +1-408-555-0133; re-redacting that history created a second pseudonym, and
-    # the developer was later shown the first pseudonym instead of the real phone
-    veil.known.add("+49 0711 2842222", "phone", "c:2")
-    tok = veil.redact("call +49 0711 2842222")[5:]
-    assert tok.startswith("+1-") and "555-01" in tok
-    piece = tok[3:]                                            # e.g. 408-555-0133
-    history = f"sqlite3 app.db \"select * from Customer where Phone LIKE '%{piece}%'\""
-    assert veil.redact(history) == history                     # not a new phone
-    assert veil.rehydrate(f"phone `{tok}`") == "phone `+49 0711 2842222`"
-    seeded = KnownValues(); seeded.add("+1 650-555-0199", "phone", "c:9")   # a real (sample) value in that range
-    v2 = Veil(Vault(":memory:", b"s"), seeded)
-    assert "650-555-0199" not in v2.redact("ticket for +1 650-555-0199")    # seeded: still matched exactly

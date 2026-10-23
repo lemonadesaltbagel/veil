@@ -304,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="OpenAI-format upstream for /chat/completions (e.g. https://api.deepseek.com)")
     s.add_argument("--bedrock-upstream", metavar="URL", help="e.g. https://bedrock-runtime.us-east-1.amazonaws.com")
     s.add_argument("--pid-file", metavar="PATH", help="write the process id here (removed on exit)")
+    s.add_argument("--tool-alias", action="append", default=[], metavar="NAME=ROLE",
+                   help="give another agent's tool the policy of a veil role (e.g. bash=Bash; repeatable)")
     s.add_argument("--reseed-interval", type=float, default=30,
                    help="seconds between change checks of remembered sources (0 = off)")
     s.add_argument("--vertex-upstream", metavar="URL", help="e.g. https://us-east5-aiplatform.googleapis.com")
@@ -428,7 +430,14 @@ def main(argv: list[str] | None = None) -> int:
             from .ner import GlinerDetector
             veil.ner = GlinerDetector()
         warm(veil.known)
-        server = serve(veil, Policy(display_real=not args.show_tokens), args.port, args.upstream, args.capture,
+        from .anthropic import configured_aliases
+        try:
+            aliases = configured_aliases(state.config(), ",".join(args.tool_alias))
+        except ValueError as e:
+            raise SystemExit(f"veil: {e}")
+        if aliases:
+            print(f"[veil] tool aliases: {', '.join(f'{k}={v}' for k, v in sorted(aliases.items()))}", file=sys.stderr)
+        server = serve(veil, Policy(display_real=not args.show_tokens, tool_aliases=aliases), args.port, args.upstream, args.capture,
                        args.openai_upstream, args.bedrock_upstream, args.vertex_upstream,
                        args.foundry_upstream, args.anthropic_aws_upstream)
         sources = state.load_sources(veil.vault.cipher)

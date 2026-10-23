@@ -329,11 +329,9 @@ Database seeding details: see `docs/DATABASES.md`.
 - **Team secrets** move through 1Password, AWS/GCP secret managers or Vault, and `team sync`
   follows a rotation.
 
-## 14. DeepSeek Harness (2026-10-23)
+## 14. Fragments of phone pseudonyms (2026-10-23)
 
-dsh 0.2.1-rc.2 ran through veil unchanged (`DEEPSEEK_BASE_URL`), and an alias map gave its tools
-the restore policies. A real DeepSeek session (9 requests) had 0 leaks and reached the correct
-diagnosis. It also exposed a bug in veil:
+A real session against the DeepSeek API (9 requests, 0 leaks, correct diagnosis) exposed a bug:
 
 1. The model searched for a *fragment* of a phone pseudonym (`LIKE '%408-555-0133%'`).
 2. On the next request, veil's phone pattern minted a *second* pseudonym for those digits.

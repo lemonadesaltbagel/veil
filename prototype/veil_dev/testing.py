@@ -132,7 +132,7 @@ def model_turn(body: dict, db_path: str = "chinook.sqlite") -> list[dict]:
         rows = [l for l in last.splitlines()[1:] if email in l]
         return [{"type": "text", "text": f"Summary for {email}: {len(rows)} invoice row(s) from the database.\n"
                  + "\n".join(rows)}]
-    shell = "Bash" if "Bash" in tools else ("bash" if "bash" in tools else None)  # Claude Code | dsh
+    shell = "Bash" if "Bash" in tools else ("bash" if "bash" in tools else None)  # Claude Code | aliased lowercase tools
     reader = "Read" if "Read" in tools else ("read" if "read" in tools else None)
     if not results and shell:
         cmd = (f"sqlite3 -header {db_path} \"select c.FirstName, c.LastName, c.Email, c.Phone, "

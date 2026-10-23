@@ -34,12 +34,33 @@ EGRESS = re.compile(
 
 CONTENT_FIELDS = {"new_string", "content", "new_source"}
 
-# Other agents' tool names -> the veil role whose arguments they share. DeepSeek Harness
-# (dsh) tools use Claude Code's argument names (command, file_path, old_string/new_string,
-# content, pattern), so every policy applies unchanged. Unlisted tools (dsh: run_code,
-# workflow, pwsh, subagent, web_fetch, terminal_*, ...) get no real values.
-TOOL_ALIASES = {"bash": "Bash", "read": "Read", "grep": "Grep", "glob": "Glob", "edit": "Edit", "write": "Write",
-                "working_directory": "Read"}  # dsh: {cd: path}, a locator like Read's file_path
+# Roles a tool can be aliased to: another agent's tool that takes the same arguments as one
+# of these gets the same policy (`tool_aliases`, set by config, env or `--tool-alias`).
+ALIAS_ROLES = {"Bash", "Read", "Grep", "Glob", "LS", "Edit", "MultiEdit", "Write", "NotebookEdit"}
+
+
+def parse_aliases(spec) -> dict[str, str]:
+    """{"bash": "Bash"} or "bash=Bash,read=Read" -> validated aliases. Unknown roles are refused:
+    an alias may only grant a tool the policy of one of veil's own roles."""
+    if isinstance(spec, str):
+        spec = dict(p.split("=", 1) for p in spec.replace(";", ",").split(",") if "=" in p)
+    out = {}
+    for name, role in (spec or {}).items():
+        name, role = str(name).strip(), str(role).strip()
+        if role not in ALIAS_ROLES:
+            raise ValueError(f"tool alias {name}={role}: role must be one of {sorted(ALIAS_ROLES)}")
+        if name:
+            out[name] = role
+    return out
+
+
+def configured_aliases(cfg: dict | None = None, extra=None) -> dict[str, str]:
+    """config.json "tool_aliases", then VEIL_TOOL_ALIASES, then explicit `extra` (later wins)."""
+    import os
+    aliases = parse_aliases((cfg or {}).get("tool_aliases"))
+    aliases.update(parse_aliases(os.environ.get("VEIL_TOOL_ALIASES", "")))
+    aliases.update(parse_aliases(extra))
+    return aliases
 
 
 PSEUDONYM_NOTICE = (
@@ -60,6 +81,7 @@ class Policy:
     full_tools: set[str] = field(default_factory=lambda: {"Bash", "Read", "Grep", "Glob", "LS"})
     preserve_tools: set[str] = field(default_factory=lambda: {"Edit", "MultiEdit", "Write", "NotebookEdit"})
     full_tool_prefixes: tuple[str, ...] = ()  # e.g. ("mcp__veil_db__",)
+    tool_aliases: dict[str, str] = field(default_factory=dict)  # other agents' names -> veil roles
 
     def mode(self, tool: str, tool_input: dict) -> str:
         if tool == "Bash" and EGRESS.search(str(tool_input.get("command", ""))):
@@ -109,7 +131,7 @@ def _texts(obj) -> str:
 
 
 def _str_replace_editor(veil: Veil, policy: Policy, tool_input: dict) -> dict:
-    """Anthropic's text-editor tool (dsh `str_replace_editor`): view | create | str_replace |
+    """Anthropic's text-editor tool (`str_replace_editor`): view | create | str_replace |
     insert, mapped onto Read / Write / Edit so the preserve and escaping rules apply."""
     cmd = tool_input.get("command")
     if cmd == "create":
@@ -128,8 +150,8 @@ def _str_replace_editor(veil: Veil, policy: Policy, tool_input: dict) -> dict:
 
 
 def rehydrate_tool_input(veil: Veil, policy: Policy, tool: str, tool_input: dict) -> dict:
-    if tool in TOOL_ALIASES:
-        return rehydrate_tool_input(veil, policy, TOOL_ALIASES[tool], tool_input)
+    if tool in policy.tool_aliases:
+        return rehydrate_tool_input(veil, policy, policy.tool_aliases[tool], tool_input)
     if tool == "str_replace_editor" and isinstance(tool_input, dict):
         return _str_replace_editor(veil, policy, tool_input)
     mode = policy.mode(tool, tool_input)
