@@ -14,6 +14,7 @@ from .vault import Vault
 
 
 # The person code inside each token shape: user_mz5z, user_mz5z+2@…, User Mz5z, First_Mz5z, Mz5z Example Street
+PHONE_TOKEN = re.compile(r"\+1-\d{3}-555-01\d\d")  # tokens.render(kind="phone")
 TOKEN_CODE = re.compile(r"(?:user_|User |First_|Last_|card_|secret_)([A-Za-z2-9]{4,6})|^([A-Za-z2-9]{4,6}) Example Street")
 
 
@@ -71,6 +72,7 @@ class Veil:
         self.ner = ner  # optional free-text detector (veil.ner.GlinerDetector)
         self.quasi_mode = "warn"  # "redact": rare quasi-identifiers are pseudonymised too (veil/quasi.py)
         self._tokens = TokenPattern()
+        self._phone_pieces: tuple[int, set[str]] = (-1, set())
         self._tokens_lock = threading.Lock()
         self._codes: dict[str, list[str]] = {}
         self._codes_version = -1
@@ -92,7 +94,7 @@ class Veil:
             # job title of one person); no person group: shared values must not link people
             extra = (extra or []) + [dataclasses.replace(s, group=None) for s in self.known.find_quasi(text)] \
                 + [s for combo, _ in self.known.quasi_combos(text) for s in combo]
-        spans = detect(text, self.known, self.vault.is_token, extra)
+        spans = [s for s in detect(text, self.known, self.vault.is_token, extra) if not self.pseudonym_piece(s)]
         if not spans:
             return text
         out, pos = [], 0
@@ -102,6 +104,17 @@ class Veil:
             pos = s.end
         out.append(text[pos:])
         return "".join(out)
+
+    def pseudonym_piece(self, span) -> bool:
+        """A phone-pattern hit that is (part of) one of our own phone pseudonyms: a model
+        searching LIKE '%408-555-0133%' for +1-408-555-0133. Re-redacting it would mint a
+        second pseudonym for the first one's digits. Seeded values are never skipped."""
+        if span.kind != "phone" or span.priority >= 10:
+            return False
+        if self._phone_pieces[0] != self.vault.version:
+            self._phone_pieces = (self.vault.version, {re.sub(r"\D", "", t)[-10:] for t in self.vault._by_token
+                                                       if PHONE_TOKEN.fullmatch(t)})
+        return re.sub(r"\D", "", span.value)[-10:] in self._phone_pieces[1]
 
     # -- token -> real ---------------------------------------------------
     def token_pattern(self) -> TokenPattern | None:

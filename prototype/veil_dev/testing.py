@@ -132,18 +132,20 @@ def model_turn(body: dict, db_path: str = "chinook.sqlite") -> list[dict]:
         rows = [l for l in last.splitlines()[1:] if email in l]
         return [{"type": "text", "text": f"Summary for {email}: {len(rows)} invoice row(s) from the database.\n"
                  + "\n".join(rows)}]
-    if not results and "Bash" in tools:
+    shell = "Bash" if "Bash" in tools else ("bash" if "bash" in tools else None)  # Claude Code | dsh
+    reader = "Read" if "Read" in tools else ("read" if "read" in tools else None)
+    if not results and shell:
         cmd = (f"sqlite3 -header {db_path} \"select c.FirstName, c.LastName, c.Email, c.Phone, "
                f"i.InvoiceId, i.InvoiceDate, i.Total, i.BillingAddress from Customer c join Invoice i "
                f"using (CustomerId) where c.Email = '{email}' order by i.InvoiceDate desc limit 3\"")
         return [{"type": "text", "text": f"Let me look up {email} in the database."},
-                {"type": "tool_use", "id": "toolu_mock_1", "name": "Bash",
+                {"type": "tool_use", "id": "toolu_mock_1", "name": shell,
                  "input": {"command": cmd, "description": "Look up the customer's latest invoices"}}]
-    if len(results) == 1 and "Read" in tools:
+    if len(results) == 1 and reader:
         m = CWD.search(json.dumps(body, ensure_ascii=False))  # system prompt or safeguards context
         cwd = m.group(1) if m else "."
         return [{"type": "text", "text": "Now the application log."},
-                {"type": "tool_use", "id": "toolu_mock_2", "name": "Read",
+                {"type": "tool_use", "id": "toolu_mock_2", "name": reader,
                  "input": {"file_path": f"{cwd.rstrip('/')}/app.log"}}]
     last = _text_of(results[-1].get("content")) if results else ""
     seen = sorted(set(EMAIL.findall(last)) | {email})

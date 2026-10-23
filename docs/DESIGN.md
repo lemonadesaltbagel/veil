@@ -219,6 +219,24 @@ real values.
   read/search → full; write/edit/patch → preserve; `write_stdin` (keystrokes into a possibly-shell
   session) and unknown tools → no real values.
 
+## Other agents' tool names (DeepSeek Harness)
+
+veil's restore policy is keyed on tool names. DeepSeek Harness (`dsh`) names its tools in lowercase
+but uses Claude Code's argument names, so an alias map routes them through the same policies:
+
+- `bash` uses shell escaping (and the egress rule);
+- `read`, `grep`, `glob` and `working_directory` get full restoration;
+- `edit` and `write` use preserve-in-file with language-aware escaping;
+- `str_replace_editor` is translated onto Write/Edit.
+
+Every other dsh tool (`run_code`, `workflow`, `pwsh`, `subagent`, `web_*`, terminals) falls through
+to "none".
+
+dsh reaches veil by setting `DEEPSEEK_BASE_URL`: its adapter speaks Anthropic Messages. Its
+`dsh_session_log` and `dsh_plugin_packages` request fields are unknown top-level fields, so veil's
+default-deny redaction covers them, and the guard checks them too. `veil audit --driver dsh` runs the
+real `dsh --profile headless` through veil, and CI runs it on every push.
+
 ## Adoption
 
 - `veil init PROJECT`: detects `*_DATABASE_URL`/`REDIS_URL`/`MONGODB_URI`… in `.env*`, SQLite files,

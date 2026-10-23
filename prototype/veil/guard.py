@@ -270,6 +270,8 @@ class Guard:
                         hits.append((a, b, PARTIAL, ix.kind_of(value), "partial"))
         if not frozen:
             for span in detect(s, None, self.veil.vault.is_token):
+                if self.veil.pseudonym_piece(span):
+                    continue
                 if not any(a < span.end and span.start < b for a, b, *_ in hits):
                     tok = self.veil.vault.token_for(span.kind, span.value)
                     hits.append((span.start, span.end, tok, span.kind, "pattern"))

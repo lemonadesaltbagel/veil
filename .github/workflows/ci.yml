@@ -105,6 +105,13 @@ jobs:
         run: uv run pytest -q -rs
       - name: Bypass matrix
         run: uv run python -m veil_dev.redteam
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: DeepSeek Harness through veil (real dsh, scripted model)
+        run: |
+          npm install -g --no-fund --no-audit @deepseek-ai/dsh@0.2.1-rc.2
+          VEIL_DSH="$(command -v dsh)" uv run veil audit --driver dsh
 
   package:
     name: build + metadata check

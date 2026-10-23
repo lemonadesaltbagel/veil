@@ -34,6 +34,13 @@ EGRESS = re.compile(
 
 CONTENT_FIELDS = {"new_string", "content", "new_source"}
 
+# Other agents' tool names -> the veil role whose arguments they share. DeepSeek Harness
+# (dsh) tools use Claude Code's argument names (command, file_path, old_string/new_string,
+# content, pattern), so every policy applies unchanged. Unlisted tools (dsh: run_code,
+# workflow, pwsh, subagent, web_fetch, terminal_*, ...) get no real values.
+TOOL_ALIASES = {"bash": "Bash", "read": "Read", "grep": "Grep", "glob": "Glob", "edit": "Edit", "write": "Write",
+                "working_directory": "Read"}  # dsh: {cd: path}, a locator like Read's file_path
+
 
 PSEUDONYM_NOTICE = (
     "Privacy note: personal data in this session (names, emails, usernames, phones, addresses, "
@@ -101,7 +108,30 @@ def _texts(obj) -> str:
     return "\0".join(out)
 
 
+def _str_replace_editor(veil: Veil, policy: Policy, tool_input: dict) -> dict:
+    """Anthropic's text-editor tool (dsh `str_replace_editor`): view | create | str_replace |
+    insert, mapped onto Read / Write / Edit so the preserve and escaping rules apply."""
+    cmd = tool_input.get("command")
+    if cmd == "create":
+        out = rehydrate_tool_input(veil, policy, "Write", {"file_path": tool_input.get("path", ""),
+                                                            "content": tool_input.get("file_text", "")})
+        return {**tool_input, "path": out["file_path"], "file_text": out["content"]}
+    if cmd in ("str_replace", "insert"):
+        out = rehydrate_tool_input(veil, policy, "Edit", {"file_path": tool_input.get("path", ""),
+                                                           "old_string": tool_input.get("old_str") or "",
+                                                           "new_string": tool_input.get("new_str") or ""})
+        res = {**tool_input, "path": out["file_path"], "new_str": out["new_string"]}
+        if tool_input.get("old_str") is not None:
+            res["old_str"] = out["old_string"]
+        return res
+    return {**tool_input, "path": veil.rehydrate(tool_input.get("path") or "")}  # view, undo_edit
+
+
 def rehydrate_tool_input(veil: Veil, policy: Policy, tool: str, tool_input: dict) -> dict:
+    if tool in TOOL_ALIASES:
+        return rehydrate_tool_input(veil, policy, TOOL_ALIASES[tool], tool_input)
+    if tool == "str_replace_editor" and isinstance(tool_input, dict):
+        return _str_replace_editor(veil, policy, tool_input)
     mode = policy.mode(tool, tool_input)
     if mode == "full":
         frags = veil.fragments(_texts(tool_input))

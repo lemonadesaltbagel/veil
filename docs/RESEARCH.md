@@ -329,7 +329,21 @@ Database seeding details: see `docs/DATABASES.md`.
 - **Team secrets** move through 1Password, AWS/GCP secret managers or Vault, and `team sync`
   follows a rotation.
 
-## 14. Known limitations (honest list)
+## 14. DeepSeek Harness (2026-10-23)
+
+dsh 0.2.1-rc.2 ran through veil unchanged (`DEEPSEEK_BASE_URL`), and an alias map gave its tools
+the restore policies. A real DeepSeek session (9 requests) had 0 leaks and reached the correct
+diagnosis. It also exposed a bug in veil:
+
+1. The model searched for a *fragment* of a phone pseudonym (`LIKE '%408-555-0133%'`).
+2. On the next request, veil's phone pattern minted a *second* pseudonym for those digits.
+3. The developer was then shown the first pseudonym instead of the real number.
+
+A phone-pattern hit whose digits are those of one of veil's own phone pseudonyms is now skipped,
+in redaction and in the guard. A blanket "skip the fictional 555-01xx range" fix was tried first: it
+leaked a sample number from that range, and the red-team test caught it.
+
+## 15. Known limitations (honest list)
 
 - `write_stdin` (Codex interactive sessions) never receives real values, so interactive tools (e.g. a
   `sqlite3` REPL) see pseudonyms; non-interactive commands are unaffected.
