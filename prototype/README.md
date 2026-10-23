@@ -5,10 +5,10 @@ Privacy middleware for AI coding agents. The model sees consistent pseudonyms
 and commands the agent runs locally get the real values back (shell- and SQL-safe).
 
 ```sh
-pip install "veil-proxy[postgres]"    # extras: postgres, mysql, mongo, redis, bedrock, ner, mssql, all
+pip install "veil-proxy[postgres]"    # extras: postgres, mysql, mongo, redis, bedrock, ner, mssql, snowflake, all
                                       # (installs the `veil` and `veil-hook` commands; import name `veil`)
 veil init ~/code/myapp                # seed from .env DB URLs, SQLite, fixtures; wire Claude Code
-veil service install                  # proxy as a LaunchAgent (macOS) / systemd user unit (Linux)
+veil service install                  # proxy as a LaunchAgent (macOS) / systemd user unit (Linux) / Startup item (Windows)
 veil status ~/code/myapp
 ```
 
@@ -21,7 +21,7 @@ https://github.com/lemonadesaltbagel/veil):
   pattern matching (1,000 labelled records).
 - **21/21** one-command bypass transforms are contained. Restored values are escaped for every
   language layer they pass through (shell, heredocs, `python -c`, `node -e`, SQL, `bash -c`...):
-  35/35 injection tests, and 55,000 fuzzed nested commands executed with 0 code executions.
+  35/35 injection tests, and 68,000 fuzzed nested commands executed with 0 code executions.
 - Prompt caching keeps working (74–89% cache hits); about 19 ms overhead per request at 40k seeded
   values, and 37 + 68 ms per 234 KB request at 1.2 million seeded values (1.1 GB).
 
@@ -29,6 +29,8 @@ One local proxy (default `127.0.0.1:8787`) serves every client, routed by path:
 Anthropic Messages (Claude Code, Agent SDK), Amazon Bedrock InvokeModel (binary eventstream),
 Google Vertex rawPredict, Microsoft Foundry (`/foundry`), Claude Platform on AWS (`/anthropic-aws`),
 OpenAI Chat Completions (Aider, Continue, OpenAI SDK) and OpenAI Responses (Codex CLI).
+DeepSeek Harness uses the [dsh-veil](https://github.com/lemonadesaltbagel/dsh-veil) plugin. Other
+agents' tools can get veil's restore rules with `veil proxy --tool-alias NAME=ROLE`.
 
 Seeds from Postgres, MySQL/MariaDB, SQLite, SQL Server (native sensitivity labels), MongoDB, Redis,
 Elasticsearch/OpenSearch and fixture files, plus personal fields declared in code (Prisma, Django,

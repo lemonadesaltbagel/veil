@@ -10,7 +10,8 @@
 **Your AI coding agent reads production-shaped data. veil makes sure the model never sees a real
 person.**
 
-veil is a local privacy proxy for AI coding agents such as Claude Code, Codex CLI and Aider. It
+veil is a local privacy proxy for AI coding agents such as Claude Code, Codex CLI, Aider and
+DeepSeek Harness. It
 replaces every real name, email, phone number, address, ID number and secret with a consistent
 pseudonym *before* the request leaves your machine. When the agent runs a command, queries a
 database or edits a file locally, veil swaps the real values back in, safely escaped. The model
@@ -192,6 +193,7 @@ One proxy serves all of them, routed by path:
 | Claude Code on Claude Platform on AWS | Anthropic Messages | `CLAUDE_CODE_USE_ANTHROPIC_AWS=1`, `ANTHROPIC_AWS_BASE_URL=http://127.0.0.1:8787/anthropic-aws`, `ANTHROPIC_AWS_WORKSPACE_ID=…` (proxy: `--anthropic-aws-upstream https://aws-external-anthropic.REGION.api.aws`) |
 | Codex CLI | OpenAI Responses | provider with `base_url = "http://127.0.0.1:8787/v1"`, `wire_api = "responses"` |
 | Aider, Continue, OpenAI SDK, LiteLLM | OpenAI Chat Completions | `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` |
+| DeepSeek Harness (`dsh`) | Anthropic Messages | the [dsh-veil](https://github.com/lemonadesaltbagel/dsh-veil) plugin: `dsh plugin --profile headless add dsh-veil` (starts veil for you) |
 
 Cloud credentials:
 
@@ -206,9 +208,10 @@ Cloud credentials:
   taken from the host and isn't documented; override it with `VEIL_ANTHROPIC_AWS_SIGV4_SERVICE` if
   needed.
 
-Every row has been exercised end to end with a real client (Claude Code 2.1.285, Codex CLI, or the
-OpenAI SDK) through veil against a faithful fake upstream, with 0 leaks. None of the cloud rows has
-been run against a live cloud account yet.
+Every row has been exercised end to end with a real client (Claude Code 2.1.285, Codex CLI, the
+OpenAI SDK, or DeepSeek Harness 0.2.1-rc.2 with dsh-veil) through veil against a faithful fake
+upstream, with 0 leaks. DeepSeek Harness has also run against the live DeepSeek API (12 requests,
+0 leaks). None of the cloud rows has been run against a live cloud account yet.
 
 **Other agents' tool names.** Real values reach a tool call only through tools veil knows by name
 (Claude Code's `Bash`, `Read`, `Edit`, …, and Anthropic's `str_replace_editor`). An agent whose tools
