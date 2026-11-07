@@ -25,7 +25,7 @@ from .anthropic import Policy, StreamRewriter, redact_request, rehydrate_respons
 from .engine import Veil
 import dataclasses
 
-from . import cloud, display, quasi
+from . import cloud, display, orcarouter, quasi
 from .guard import Guard
 from .openai import ChatStreamRewriter, is_chat_path, redact_chat_request, rehydrate_chat_response
 from .responses import (ResponsesStreamRewriter, is_responses_path, redact_responses_request,
@@ -58,7 +58,7 @@ def _strings(node):
 def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client, log=sys.stderr,
                  observer=None, openai_upstream: str | None = None, bedrock_upstream: str | None = None,
                  vertex_upstream: str | None = None, foundry_upstream: str | None = None,
-                 anthropic_aws_upstream: str | None = None):
+                 anthropic_aws_upstream: str | None = None, orcarouter_credential=None):
     """`observer(exchange)` (optional) receives one dict per request: path, safe headers,
     `original` body, `sent` body (exact upstream payload), `model_view` (the model's
     reply before rehydration), status, findings and timings. For audits and tests."""
@@ -125,7 +125,10 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
             if self.path.split("?")[0] == "/veil/health":  # local only; never values
                 if not self._local_only():
                     return
-                body = json.dumps({"ok": True, "upstream": upstream, "known_values": len(veil.known),
+                orca = orcarouter_credential() if orcarouter_credential else None
+                body = json.dumps({"ok": True, "upstream": upstream,
+                                   "provider": orcarouter.PROVIDER_ID if orcarouter_credential else None,
+                                   "orcarouter": orcarouter.describe(orca) if orcarouter_credential else None, "known_values": len(veil.known),
                                    "display": display.resolve(self.headers, home(), not policy.display_real),
                                    "sources": len(getattr(getattr(veil, "reseeder", None), "sources", [])),
                                    "reseed_passes": getattr(getattr(veil, "reseeder", None), "runs", 0),
@@ -173,6 +176,8 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
             is_messages = api is not None
             target = provider_upstream or {"chat": openai_upstream, "responses": openai_upstream,
                                            "bedrock": bedrock_upstream, "vertex": vertex_upstream}.get(api, upstream)
+            # OrcaRouter Cyber Inference: one credential for every API surface it serves
+            orca = None if not orcarouter_credential else orcarouter_credential()
             if api in ("chat", "responses", "bedrock", "vertex") and not target:
                 return self._fail(404, f"veil: no upstream configured for {api} (--{'openai' if api in ('chat', 'responses') else api}-upstream)")
             if api is None and not provider and (bedrock_upstream or vertex_upstream) and not path.startswith("/v1/"):
@@ -219,6 +224,8 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
                     return self._fail(502, f"veil could not redact request: {type(e).__name__}")
             headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != display.HEADER}
             headers["accept-encoding"] = "identity"
+            if orca is not None and orca.key:
+                headers.update(orcarouter.auth_headers(orca))  # the OrcaRouter key replaces any client credential
             url = (target or upstream).rstrip("/") + path
             if api == "bedrock" or (api is None and target == bedrock_upstream and bedrock_upstream):
                 headers = cloud.bedrock_auth(self.command, url, headers, body_bytes)  # signs the *redacted* body
@@ -232,6 +239,13 @@ def make_handler(veil: Veil, policy: Policy, upstream: str, client: httpx.Client
             t1 = time.perf_counter()
             resp = client.send(req, stream=True)
             exch["status"] = resp.status_code
+            if orca is not None and resp.status_code == 401 and orca.key:
+                # terminal: the key was revoked/expired. Mark this generation; never refresh, never loop.
+                cur = orcarouter_credential()
+                if cur is not None and cur.generation == orca.generation and not cur.needs_reauth:
+                    orcarouter.mark_reauth(cur)
+                    print("[veil] OrcaRouter key rejected (401): run `veil provider orcarouter pkce` or `api-key` again",
+                          file=log)
             try:
                 ctype = resp.headers.get("content-type", "")
                 self.send_response(resp.status_code)
@@ -391,6 +405,14 @@ def _accumulate(view: dict, ev: dict) -> None:
         view["usage"].update(ev.get("usage") or {})
 
 
+def orca_state(cred) -> str:
+    if cred is None:
+        return "no credential: run `veil provider orcarouter api-key` or `... pkce`"
+    if cred.needs_reauth:
+        return "key rejected; run `veil provider orcarouter pkce` (or api-key) again"
+    return f"{cred.source}, {cred.masked()}"
+
+
 def capture_observer(directory: str):
     """Write what the model saw (upstream payload + its reply, tokens only) per request."""
     import itertools
@@ -413,7 +435,7 @@ def capture_observer(directory: str):
 def serve(veil: Veil, policy: Policy, port: int = 8787, upstream: str = "https://api.anthropic.com",
           capture: str | None = None, openai_upstream: str | None = None, bedrock_upstream: str | None = None,
           vertex_upstream: str | None = None, foundry_upstream: str | None = None,
-          anthropic_aws_upstream: str | None = None):
+          anthropic_aws_upstream: str | None = None, orcarouter_credential=None):
     from .netenv import normalize_no_proxy
     normalize_no_proxy()
     client = httpx.Client(timeout=httpx.Timeout(600, connect=10))
@@ -424,6 +446,11 @@ def serve(veil: Veil, policy: Policy, port: int = 8787, upstream: str = "https:/
                                                                    bedrock_upstream=bedrock_upstream,
                                                                    vertex_upstream=vertex_upstream,
                                                                    foundry_upstream=foundry_upstream,
-                                                                   anthropic_aws_upstream=anthropic_aws_upstream))
+                                                                   anthropic_aws_upstream=anthropic_aws_upstream,
+                                                                   orcarouter_credential=orcarouter_credential))
     print(f"[veil] listening on http://127.0.0.1:{port} -> {upstream}", file=sys.stderr)
+    if orcarouter_credential:
+        cred = orcarouter_credential()
+        print(f"[veil] provider: {orcarouter.PROVIDER_NAME} ({orca_state(cred)}) -> {orcarouter.api_base()}",
+              file=sys.stderr)
     return server

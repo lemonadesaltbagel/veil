@@ -61,6 +61,22 @@ def _q(arg: str) -> str:
     return f'"{arg}"' if " " in arg or "\\" in arg else arg
 
 
+def config() -> dict:
+    from .state import config as read
+    try:
+        return read()
+    except (OSError, ValueError):
+        return {}
+
+
+def config() -> dict:
+    from .state import config as read
+    try:
+        return read()
+    except (OSError, ValueError):
+        return {}
+
+
 def state_home() -> str:
     from .state import home
     return home()
@@ -83,6 +99,16 @@ def write_claude_settings(project: str, port: int, hooks: bool = True, deny_env:
             raise SystemExit(f"{path} is not valid JSON; fix it before running veil init")
     env = settings.setdefault("env", {})
     env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
+    cfg = config()
+    if cfg.get("provider") == "orcarouter":  # OrcaRouter Cyber Inference: the proxy holds the key
+        env["ANTHROPIC_AUTH_TOKEN"] = "veil-local"  # placeholder stays here; the proxy swaps in the real key
+        for role in ("OPUS", "SONNET", "HAIKU"):
+            env[f"ANTHROPIC_DEFAULT_{role}_MODEL"] = cfg.get("model") or "orcarouter/auto"
+    cfg = config()
+    if cfg.get("provider") == "orcarouter":  # OrcaRouter Cyber Inference: the proxy holds the key
+        env["ANTHROPIC_AUTH_TOKEN"] = "veil-local"  # placeholder stays here; the proxy swaps in the real key
+        for role in ("OPUS", "SONNET", "HAIKU"):
+            env[f"ANTHROPIC_DEFAULT_{role}_MODEL"] = cfg.get("model") or "orcarouter/auto"
     no_proxy = {h for h in env.get("NO_PROXY", "").split(",") if h} | {"127.0.0.1", "localhost"}
     env["NO_PROXY"] = ",".join(sorted(no_proxy))
     if hooks:

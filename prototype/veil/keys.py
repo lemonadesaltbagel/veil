@@ -16,6 +16,7 @@ Sources, in order:
 from __future__ import annotations
 
 import base64
+import json
 import os
 import secrets
 import shutil
@@ -88,6 +89,39 @@ def _env_name(name: str) -> str:
     return "VEIL_" + name.upper().replace("-", "_")
 
 
+# Imported credentials (OrcaRouter keys) are stored as a JSON document around the base64 value,
+# not base64 of raw bytes: the OS stores read them back for any app of the user, so the on-disk
+# fallback file does not contain the key verbatim either. Key material (32 bytes) uses base64.
+
+def _wrap(value: bytes) -> str:
+    return json.dumps({"veil": "v1", "b64": base64.b64encode(value).decode()})
+
+
+def _unwrap(text: str) -> bytes:
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        doc = None
+    if isinstance(doc, dict) and doc.get("veil") == "v1" and isinstance(doc.get("b64"), str):
+        return base64.b64decode(doc["b64"])
+    if isinstance(doc, dict):  # a document we cannot read is not a key
+        return text.encode()
+    return base64.b64decode(text) if _looks_b64(text) else text.encode()
+
+
+def _looks_b64(text: str) -> bool:
+    try:
+        base64.b64decode(text, validate=True)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _looks_imported(raw: bytes) -> bool:
+    """An imported credential (an OrcaRouter sk-orca-... key) is not 32-byte key material."""
+    return raw.startswith(b"sk-") or raw.startswith(b"{")
+
+
 def _keychain_args() -> list[str] | None:
     """[] = the default (login) keychain; [path] = a specific keychain file;
     None = keychain unavailable (VEIL_KEYCHAIN names a file that doesn't exist).
@@ -106,14 +140,14 @@ def _keychain_get(name: str) -> bytes | None:
                        capture_output=True, text=True, timeout=30)
     if r.returncode != 0 or not r.stdout.strip():
         return None
-    return base64.b64decode(r.stdout.strip())
+    return _unwrap(r.stdout.strip())
 
 
 def _keychain_put(name: str, key: bytes) -> bool:
     args = _keychain_args()
     if args is None:
         return False
-    value = base64.b64encode(key).decode()
+    value = _wrap(key)
     if args:  # explicit keychain file (tests, dedicated keychains): argv form honours the path
         r = subprocess.run(["security", "add-generic-password", "-U", "-s", SERVICE, "-a", name, "-w", value, *args],
                            capture_output=True, text=True, timeout=30)
@@ -129,14 +163,14 @@ def _secret_tool_get(name: str) -> bytes | None:
                            capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return base64.b64decode(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+    return _unwrap(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
 
 
 def _secret_tool_put(name: str, key: bytes) -> bool:
     # the secret is read from stdin: never in argv
     try:
         r = subprocess.run(["secret-tool", "store", f"--label=veil {name}", "service", SERVICE, "account", name],
-                           input=base64.b64encode(key).decode(), capture_output=True, text=True, timeout=30)
+                           input=_wrap(key), capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return r.returncode == 0 and _secret_tool_get(name) == key
@@ -203,7 +237,7 @@ def set_key(name: str, home: str, key: bytes) -> str:
     path = os.path.join(d, name)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
-        f.write(key)
+        f.write(_wrap(key).encode() if _looks_imported(key) else key)
     return "file"
 
 
@@ -225,7 +259,10 @@ def peek_key(name: str, home: str) -> bytes | None:
         if key:
             return key
     path = os.path.join(home, "keys", name)
-    return open(path, "rb").read() if os.path.exists(path) else None
+    if not os.path.exists(path):
+        return None
+    raw = open(path, "rb").read()
+    return _unwrap(raw.decode()) if _looks_imported(raw) else raw
 
 
 def delete_key(name: str, home: str) -> None:

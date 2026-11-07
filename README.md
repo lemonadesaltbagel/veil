@@ -180,6 +180,40 @@ person keeps one pseudonym across tables and stores. While the proxy runs, chang
 re-seeded in the background, reading only new rows where the source allows it. Details:
 [docs/DATABASES.md](docs/DATABASES.md).
 
+## OrcaRouter Cyber Inference provider
+
+[OrcaRouter](https://www.orcarouter.ai) is an OpenAI-compatible AI gateway that routes many providers
+behind one endpoint. veil ships a first-class `orcarouter` provider, so redacted traffic can go to
+OrcaRouter with either an API key or an OAuth 2.0 + PKCE browser login. It also runs gateway-level,
+zero-trust security for AI agents on the same endpoint — screening every prompt/response and governing
+every tool call on a default-deny basis, with no application code changes.
+
+```sh
+cd prototype
+uv run veil provider orcarouter api-key            # reads sk-orca-… from a prompt or ORCAROUTER_API_KEY
+uv run veil provider orcarouter pkce               # browser login (loopback redirect), or --flow code on a headless box
+uv run veil provider orcarouter status             # masked account, source, generation, scopes
+uv run veil provider orcarouter models             # live catalog (GET /v1/models), capability-filtered
+uv run veil provider orcarouter models --capability reasoning --modality text
+uv run veil provider orcarouter config --model orcacyber-ultra-1.0
+uv run veil proxy --provider orcarouter            # redact, then forward to https://api.orcarouter.ai/v1
+```
+
+- **Endpoint:** `https://api.orcarouter.ai/v1` (override with `ORCA_BASE_URL`; the OAuth origin is
+  `https://www.orcarouter.ai` and can be split with `ORCA_AUTH_BASE_URL` / `ORCA_API_BASE_URL`).
+  Non-loopback origins must be HTTPS.
+- **Auth:** `veil` replaces whatever credentials the client sent with the stored OrcaRouter
+  credential, so a client can talk to the local proxy with a placeholder token. PKCE uses S256 only;
+  the exchanged key is durable (no refresh grant). A 401 from upstream marks exactly that stored
+  credential generation as needing re-login; run `veil provider orcarouter pkce` again.
+- **Models:** the selector is built from the live catalog. Default `orcarouter/auto`; cyber models
+  `orcacyber-ultra-1.0` and `orcacyber-zero-1.5` (see
+  [cyber](https://www.orcarouter.ai/cyber) and [models](https://www.orcarouter.ai/models?tier=cyber));
+  fallback `orcarouter/fusion`. When the catalog is unreachable, a bundled seed list is used.
+- **Claude Code:** `veil init` writes the Anthropic settings for the configured provider; with
+  `orcarouter`, `ANTHROPIC_AUTH_TOKEN` becomes a local placeholder and the default Sonnet/Opus/Haiku
+  model maps to the configured OrcaRouter model.
+
 ## Supported clients
 
 One proxy serves all of them, routed by path:

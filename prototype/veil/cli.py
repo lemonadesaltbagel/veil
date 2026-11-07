@@ -9,6 +9,7 @@
   veil reveal [FILE]               pseudonyms -> real values (alias of rehydrate)
   veil share [FILE]                real values -> pseudonyms, safe to paste into tickets/chat
   veil proxy [--port 8787]         run the ANTHROPIC_BASE_URL proxy
+  veil provider orcarouter ...     OrcaRouter Cyber Inference: api-key | pkce | status | models | logout
   veil hook pre|post               Claude Code PreToolUse/PostToolUse hook
   veil audit [--driver ...]        run an agent session through veil, report what the LLM received
   veil init [PROJECT]              detect + seed sources, route Claude Code through veil (project-local)
@@ -221,6 +222,103 @@ def _team(args) -> int:
     return 0
 
 
+def _provider_auth(args):
+    """Both authentication entries end here: one ordinary OrcaRouter API key."""
+    from . import orcarouter
+    if args.auth == "api-key":
+        key = args.key
+        if not key:
+            import getpass
+            key = getpass.getpass("OrcaRouter API key (sk-orca-...): ")
+        try:
+            cred = orcarouter.connect_api_key(key)
+        except orcarouter.OrcaError as e:
+            raise SystemExit(f"veil: {e}")
+        print(f"OrcaRouter: API key saved ({cred.masked()}); billing, keys and revocation: "
+              f"https://www.orcarouter.ai/console", file=sys.stderr)
+        return cred
+    if args.auth == "pkce":
+        try:
+            cred = orcarouter.connect("a" if args.flow == "redirect" else "b")
+        except orcarouter.OrcaError as e:
+            raise SystemExit(f"veil: {e}")
+        print(f"OrcaRouter: connected with OAuth 2.0 + PKCE ({cred.masked()}, scope {cred.scope}); "
+              "the key is reused until you revoke it at https://www.orcarouter.ai/console/authorized-apps",
+              file=sys.stderr)
+        return cred
+    cred = orcarouter.load_credential()
+    if orcarouter.requires_login(cred):
+        raise SystemExit("veil: no usable OrcaRouter credential: run `veil provider orcarouter api-key` "
+                         "or `veil provider orcarouter pkce`")
+    return cred
+
+
+def _provider(args) -> int:
+    from . import orcarouter
+    if args.name in (None, "list"):
+        print(orcarouter.PROVIDER_ID, "  ", orcarouter.PROVIDER_NAME, sep="")
+        print(f"  inference  {orcarouter.api_base()}  (OpenAI + Anthropic wire format)")
+        print(f"  auth       {orcarouter.auth_base()}  (OAuth 2.0 + PKCE, no client secret)")
+        print(f"  models     {orcarouter.DEFAULT_MODEL} (default) | {', '.join(orcarouter.CYBER_MODELS)} (cyber tier) "
+              f"| {orcarouter.FUSION_MODEL} (fallback)")
+        print(f"  docs       {orcarouter.EXAMPLES_URL}  catalog: {orcarouter.CATALOG_URL}")
+        if args.name == "list":
+            return 0
+    if args.action == "api-key":
+        _provider_auth(args)
+        return 0
+    if args.action == "pkce":
+        args.auth = "pkce"
+        _provider_auth(args)
+        return 0
+    if args.action == "logout":
+        gone = orcarouter.clear_credential()
+        print("OrcaRouter credential removed" if gone else "no stored OrcaRouter credential")
+        return 0 if gone else 1
+    cred = orcarouter.load_credential()
+    if cred is not None and not cred.needs_reauth and not orcarouter.uses_env_key():
+        cfg = state.config()
+        if (cfg.get("provider"), cfg.get("model")) != ("orcarouter", args.model or orcarouter.DEFAULT_MODEL):
+            cfg["provider"], cfg["model"] = "orcarouter", args.model or cfg.get("model") or orcarouter.DEFAULT_MODEL
+            state.save_config(cfg)  # so `veil init` / `veil service` route Claude Code through the provider
+    if args.action == "status":
+        info = orcarouter.describe(cred)
+        if args.json:
+            print(json.dumps(info))
+        else:
+            print(f"provider   {info['name']} ({orcarouter.PROVIDER_ID})")
+            if not info["configured"]:
+                print("credential rejected: reconnect with `veil provider orcarouter pkce` (or api-key)"
+                      if cred else "credential not configured")
+                print(f"  {info['hint']}")
+                return 1
+            print(f"credential {info['auth']}  {info['key']}  scope {info['scope']}")
+            print(f"inference  {orcarouter.api_base()}")
+            print(f"model      {state.config().get('model') or orcarouter.DEFAULT_MODEL} (default)")
+        return 0 if info["configured"] else 1
+    # models / config: live discovery through the provider path (the key stays server-side)
+    models, live, note = orcarouter.discover(cred=cred)
+    opts = orcarouter.selector_options(models, args.capability, selected=args.model,
+                                       modalities=set(args.modality) or None, live=live,
+                                       degraded="" if live else note)
+    if args.action == "config":
+        configured = (state.config().get("model") if not args.model else None) or args.model or orcarouter.DEFAULT_MODEL
+        out = {"provider": orcarouter.PROVIDER_ID, "name": orcarouter.PROVIDER_NAME,
+               "openai_upstream": orcarouter.api_base(), "model": configured,
+               "credential": orcarouter.describe(cred), "catalog": note, "live": live}
+        print(json.dumps(out))
+        return 0
+    if args.json:
+        print(json.dumps(opts))
+        return 0
+    print(f"# {note}" + ("" if live else "  [degraded: verified fallback]"))
+    for m in opts["options"]:
+        print(f"{m['id']}\t{m['name']}\t{m['context_length']}\t{','.join(m['input_modalities'])}")
+    if opts["cleared"]:
+        print(f"# {args.model} is no longer offered for {args.capability}; pick a model again", file=sys.stderr)
+    return 0 if opts["options"] else 1
+
+
 def _service_status(port: int) -> str:
     from . import adopt
     if sys.platform == "win32":
@@ -315,6 +413,25 @@ def main(argv: list[str] | None = None) -> int:
                    help="Microsoft Foundry, served at /foundry: e.g. https://RESOURCE.services.ai.azure.com/anthropic")
     s.add_argument("--anthropic-aws-upstream", metavar="URL",
                    help="Claude Platform on AWS, served at /anthropic-aws: e.g. https://aws-external-anthropic.us-east-1.api.aws")
+    s.add_argument("--provider", choices=["orcarouter"], metavar="NAME",
+                   help="named provider preset; orcarouter = OrcaRouter Cyber Inference "
+                        "(https://api.orcarouter.ai/v1, OpenAI and Anthropic formats)")
+    s.add_argument("--auth", choices=["api-key", "pkce"], default=None,
+                   help="with --provider orcarouter: paste an sk-orca- key now, or connect with OAuth 2.0 + PKCE now")
+    s.add_argument("--model", help="with --provider orcarouter: default model (orcarouter/auto unless set)")
+    s = sub.add_parser("provider", help="model providers: OrcaRouter Cyber Inference (API key or OAuth 2.0 + PKCE)")
+    s.add_argument("name", nargs="?", choices=["orcarouter", "list"])
+    s.add_argument("action", nargs="?",
+                   choices=["api-key", "pkce", "status", "models", "logout", "config"], default="status")
+    s.add_argument("--key", metavar="SK_ORCA", help="api-key: OrcaRouter key (omit to read it from a prompt)")
+    s.add_argument("--flow", choices=["redirect", "code"], default="redirect",
+                   help="pkce: redirect = browser callback on 127.0.0.1; code = paste the code yourself")
+    s.add_argument("--capability", default="chat",
+                   choices=["chat", "multimodal", "embedding", "image", "video", "rerank"],
+                   help="models: which selector to print (multimodal --modality image|audio|video)")
+    s.add_argument("--modality", action="append", default=[], help="models: required input modality (repeatable)")
+    s.add_argument("--model", help="models: check whether a retained value is still offered")
+    s.add_argument("--json", action="store_true", help="machine-readable output")
     s = sub.add_parser("hook"); s.add_argument("kind", choices=["pre", "post"])
     s = sub.add_parser("init"); s.add_argument("project", nargs="?", default=".")
     s.add_argument("--port", type=int, default=8787); s.add_argument("--source", action="append", default=[])
@@ -337,6 +454,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--ner", action="store_true"); s.add_argument("--capture", metavar="DIR")
     args = p.parse_args(argv)
 
+    if args.cmd == "provider":
+        return _provider(args)
     if args.cmd == "service":
         return _service(args)
     if args.cmd == "display":
@@ -437,11 +556,29 @@ def main(argv: list[str] | None = None) -> int:
             aliases = configured_aliases(state.config(), ",".join(args.tool_alias))
         except ValueError as e:
             raise SystemExit(f"veil: {e}")
+        if getattr(args, "provider", None):
+            from . import orcarouter
+            cred = _provider_auth(args)
+            base = orcarouter.api_base()  # .../v1; the proxy appends /v1/... so strip it here
+            root = base[:-3] if base.endswith("/v1") else base
+            args.upstream = args.openai_upstream = root
+            args.model = getattr(args, "model", None) or orcarouter.DEFAULT_MODEL
+            print(f"[veil] provider {orcarouter.PROVIDER_NAME}: model {args.model} -> {base} "
+                  f"(default {orcarouter.DEFAULT_MODEL}; cyber models {', '.join(orcarouter.CYBER_MODELS)}; "
+                  f"fallback {orcarouter.FUSION_MODEL})", file=sys.stderr)
+            try:
+                models, live, note = orcarouter.discover(cred=cred)
+                print(f"[veil] model catalog: {note}; {len(orcarouter.filter_capability(models, 'chat'))} chat models",
+                      file=sys.stderr)
+            except Exception as e:
+                print(f"[veil] model catalog: {type(e).__name__}", file=sys.stderr)
         if aliases:
             print(f"[veil] tool aliases: {', '.join(f'{k}={v}' for k, v in sorted(aliases.items()))}", file=sys.stderr)
         server = serve(veil, Policy(display_real=not args.show_tokens, tool_aliases=aliases), args.port, args.upstream, args.capture,
                        args.openai_upstream, args.bedrock_upstream, args.vertex_upstream,
-                       args.foundry_upstream, args.anthropic_aws_upstream)
+                       args.foundry_upstream, args.anthropic_aws_upstream,
+                       orcarouter_credential=(lambda: orcarouter.load_credential())
+                       if getattr(args, "provider", None) else None)
         sources = state.load_sources(veil.vault.cipher)
         if sources and args.reseed_interval > 0:
             from .reseed import Reseeder
